@@ -1,0 +1,63 @@
+[build-system]
+requires = ["hatchling>=1.33"]
+build-backend = "hatchling.build"
+
+[project]
+name = "flightcheck"
+version = "0.1.0"
+description = "Local-first CLI that checks Python AI apps for BharatCode API integration mistakes."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+authors = [{ name = "Soham Ghodake" }]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development :: Quality Assurance",
+  "Topic :: Software Development :: Testing",
+]
+# Version bounds verified on PyPI on 2026-11-06 (see docs/DECISIONS.md, ADR-008).
+dependencies = [
+  "typer>=0.28,<1",
+  "rich>=15,<16",
+  "pydantic>=2.14,<3",
+  "httpx2>=2.16,<3",
+  "fastapi>=0.162,<1",
+  "uvicorn>=0.54,<1",
+  "jinja2>=3.1.6,<4",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=9.2,<10",
+  "ruff>=0.17.4,<0.18",
+  "openai>=3.46,<4",
+]
+
+[project.scripts]
+flightcheck = "flightcheck.cli.app:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/flightcheck"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-markers"
+markers = [
+  "slow: slow tests (subprocess, server threads)",
+  "live: tests that call the real BharatCode API; require BHARATCODE_API_KEY",
+]

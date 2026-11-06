@@ -1,0 +1,9 @@
+FlightCheck — Test any AI integration. Ship with confidence.
+Built for the BharatCode Build League (Round 1), direction: Coding & developer tools.
+
+FlightCheck checks Python apps that call the BharatCode API (https://bharatcode.ai/api/model/v1)
+for integration mistakes: static rules for BharatCode's documented contract, a local
+traffic-recording mock with failure scenarios (busy 503, truncation, tool calls, stream failure),
+and opt-in explanations generated with BharatCode's qwen-3.8-27b model.
+
+Repository: https://github.com/sohamghodake/FlightCheck   License: MIT   Author: Soham Ghodake (sohamghodake)

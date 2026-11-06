@@ -1,1 +1,23 @@
 FLIGHTCHECK_IMPLEMENTATION_PHASE_PLAN.md 
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Virtual environments
+.venv/
+venv/
+
+# FlightCheck output
+.flightcheck/
+
+# Secrets (.env is already listed above)
+.env.*
+!.env.example
