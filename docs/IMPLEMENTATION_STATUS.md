@@ -4,7 +4,7 @@
 | ----- | ------------------------------------------------------------------------- | ----------- | ---------- | ---------------------------------------------- | -------------------------------------------------------- |
 | 0     | Scope freeze, repository bootstrap, continuity docs                       | done        | 2026-11-06 | `chore: bootstrap repository (phase 0)`        | Gates green on 3.11 and 3.12 locally; see PHASE_00.md     |
 | 1     | Core foundation: models, config, errors, logging, redaction, paths        | done        | 2026-11-06 | `feat(core): models, config, redaction, logging, paths (phase 1)` | 99 tests; ADR-010, ADR-023; see PHASE_01.md |
-| 2     | Discovery, AST index, provider detection                                  | not started |            |                                                |                                                          |
+| 2     | Discovery, AST index, provider detection                                  | done        | 2026-11-06 | `feat(scanner): discovery, AST index, provider detection (phase 2)` | 213 tests; ADR-011, ADR-024; see PHASE_02.md |
 | 3     | Rule engine, BharatCode contract rules, `scan`, JSON + terminal output    | not started |            |                                                | First vertical slice                                     |
 | 4     | Robustness and security rules, fixture suite, evaluation script           | not started |            |                                                |                                                          |
 | 5A    | Mock provider: payloads, faults, recorder, non-streaming endpoints        | not started |            |                                                | Can run before Phase 4 (depends on 1 only)               |
@@ -26,22 +26,28 @@ The commit column names the phase commit by its message; find its hash with
 - Working commands: `flightcheck --version` and `python -m flightcheck --version` (print
   `flightcheck 0.1.0`); `flightcheck --help` lists the four P0 commands as coming in later phases.
   No other commands exist yet.
-- Package: `src/flightcheck/{__init__,__main__}.py`, `cli/{__init__,app}.py`, and
+- Package: `src/flightcheck/{__init__,__main__}.py`, `cli/{__init__,app}.py`,
   `core/{models,config,errors,logging,redact,paths}.py` (stdlib + pydantic only, enforced by
-  `tests/unit/test_core_imports.py`).
-- Tests: 99 (`tests/cli`, `tests/unit`); `FLIGHTCHECK_NO_NETWORK=1` is set for every test.
+  `tests/unit/test_core_imports.py`) and `scanner/{__init__,discovery,ast_utils,parser,detect}.py`
+  (`discover()`, `build_index()`, `detect()` / `detect_providers()`; no rules yet). The scanner
+  imports no `subprocess`/`importlib`/`runpy`/`providers`/`runtime` and calls no
+  `exec`/`eval`/`compile` (enforced by `tests/scanner/test_detect.py`).
+- Tests: 213 (`tests/cli`, `tests/unit`, `tests/scanner`; fixtures in `tests/fixtures/parse`);
+  `FLIGHTCHECK_NO_NETWORK=1` is set for every test. One `slow` test (200 files indexed < 3 s).
 - Placeholder types to tighten later (ADR-023 item 7): `ScenarioResult.exchanges` (Phase 5A),
   `Report.capability_profile` and `ProviderConfig.declared_capabilities` (Phase 6),
   `Report.ai_suggestions` (Phase 8).
-- CI: `.github/workflows/ci.yml` (ruff check, ruff format --check, pytest, on 3.11/3.12/3.13).
-  Not yet run on GitHub: the push is blocked (GitHub access for `sohamghodake/FlightCheck`).
+- CI: `.github/workflows/ci.yml` (ruff check, ruff format --check, pytest on 3.11/3.12/3.13).
+  Phases 0 and 1 are pushed and CI is green on GitHub (Python 3.11/3.12/3.13). Phase 2 is
+  committed locally and not yet pushed.
 - Known broken: nothing.
 - BharatCode key available: no (never paste the key).
 - Plan: `docs/FLIGHTCHECK_IMPLEMENTATION_PHASE_PLAN.md`, local-only and git-ignored (ADR-000).
 
 ## Next phase
 
-- Phase 2: Discovery, AST index, provider detection. Prompt in plan §28 ("Prompt — Phase 2").
+- Phase 3: Rule engine, BharatCode contract rules, `scan` command, JSON + terminal output (first
+  vertical slice). Prompt in plan §28 ("Prompt — Phase 3").
 
 ## Dropped / deferred (per plan §7.3)
 

@@ -4,11 +4,12 @@ This is the living description of how FlightCheck is structured. Together with
 [DECISIONS.md](DECISIONS.md) it is the source of truth: if the two disagree, the newer ADR wins and
 this file is corrected in the same commit.
 
-**Current state (Phase 1):** `src/flightcheck/__init__.py`, `__main__.py`, `cli/app.py` (with
-`--version`) and the `core` package (`models`, `config`, `errors`, `logging`, `redact`, `paths`)
-exist. Conventions settled while building `core` are in ADR-023. Everything else below is the
-target design. Modules are created in the phase that first gives them real code; there are no
-placeholder modules.
+**Current state (Phase 2):** `src/flightcheck/__init__.py`, `__main__.py`, `cli/app.py` (with
+`--version`), the `core` package (`models`, `config`, `errors`, `logging`, `redact`, `paths`) and
+the scanner foundation (`scanner/discovery`, `ast_utils`, `parser`, `detect`; no rules yet)
+exist. Conventions settled while building `core` are in ADR-023; scanner resolution and detection
+rules are in ADR-011 and ADR-024. Everything else below is the target design. Modules are created
+in the phase that first gives them real code; there are no placeholder modules.
 
 ## 1. Shape of the system
 

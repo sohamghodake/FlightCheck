@@ -193,3 +193,62 @@ Format:
      (1 MB = 1 MiB).
 - Consequences: Later phases build on these without re-deciding them. Changes require a new ADR
   that supersedes the relevant item.
+
+## ADR-011 — One-hop resolution only; limitations are documented
+
+- Date: 2026-11-06 · Phase: 2 · Status: accepted
+- Context: Static rules need to know which client a call such as `client.responses.create(...)`
+  uses, but FlightCheck never runs repository code and has no type inference.
+- Decision: The AST index (`scanner/parser.py`) resolves a call's receiver one hop, lexically:
+  1. an inline constructor (`OpenAI(...).responses.create`);
+  2. a bare name bound by `=`, an annotated assignment or `with ... as name` in the current
+     function, then in enclosing functions, then at module level (class bodies are skipped, as in
+     Python's own name lookup). In the same scope the latest binding at or before the call line
+     wins; from another scope the last binding in that scope is used;
+  3. `self.<attr>` (the method's first parameter) bound anywhere in the same class, including a
+     class-body assignment; bindings made in a later method still count.
+  Client constructors are recognised only through the file's imports (`import openai as oa`,
+  `from openai import OpenAI as C`); an unimported `OpenAI()` is not a client. One-hop lookups
+  also give `base_url` constant fragments (`BASE = "https://…"`) and environment variable names
+  (`url = os.getenv("X")`) for detection; `kwargs` themselves keep `Unknown` for non-literals.
+- Not resolved (the call site is still indexed, with `binding=None`): clients passed as
+  arguments, returned from factories, stored in containers, imported from other modules,
+  captured by a closure inside a method (`self` of the outer method), produced by lambdas, or
+  bound with the walrus operator; tuple unpacking; `global`/`nonlocal`; `getattr` dispatch;
+  decorators are recorded by name, never evaluated. Such call sites take the repo-level provider
+  at `low` confidence (ADR-024). Only literal values are inspected; `try` coverage is lexical
+  (the body of a `try` in the same function; handlers, `else` and `finally` do not count, and a
+  `def` inside a `try` is not protected).
+- Consequences: Simple, fast and predictable (200 files index in well under a second). Some true
+  problems are reported at lower confidence or missed. Phase 3 copies this list into
+  `docs/RULES.md` and the report footer (plan §16.2).
+
+## ADR-024 — Provider detection combination rules
+
+- Date: 2026-11-06 · Phase: 2 · Status: accepted
+- Context: The plan's signal table (§16.1 step 4) says to take the highest-confidence signal and
+  to report `unknown` on conflicting high-confidence signals, but not how to break ties between
+  equal medium or low signals, nor what to do for HTTP clients.
+- Decision:
+  1. Highest confidence wins. Two `high` signals naming different providers → `unknown` (`low`)
+     plus an `info` diagnostic `provider_conflict`.
+  2. A documented-model signal (`model="qwen-3.8-27b"` / `"deepseek-v4.1-flash"`, from
+     BHARATCODE_CONTRACT.md) is *supporting*: it never outweighs a direct signal of the same
+     confidence. So `OpenAI(base_url="https://other.example/v1")` with a BharatCode model stays
+     `openai_compatible_unknown`, while `OpenAI()` with that model becomes `bharatcode`/`medium`.
+  3. Remaining equal-confidence ties resolve in the order `bharatcode` >
+     `openai_compatible_unknown` > `openai_or_env` > `unknown` (e.g. a BharatCode API-key env
+     name plus an env-supplied `base_url` → `bharatcode`/`medium`).
+  4. `httpx`/`httpx2`/`requests` clients without `base_url` are `unknown`/`low` (the
+     `openai_or_env` default applies only to the OpenAI SDK constructors).
+  5. A call site with a resolved client inherits the client's signals and adds its own (model,
+     raw URL). An unresolved call site uses its own signals plus "repo-level provider at `low`".
+     The repo-level detection combines every client and call-site signal (location path `"."`,
+     line 0) and is absent when the repository has no clients or call sites.
+  6. `flightcheck.toml` `provider = "bharatcode"` is passed in as `declared_provider` and adds a
+     `high` signal everywhere. Signals are matched case-insensitively (`bharatcode.ai`,
+     `BHARATCODE` in env var names). The `openai` classification is not produced in the MVP: the
+     signal table has no row for it.
+- Consequences: Detection is deterministic and explainable (each `ProviderDetection.signals`
+  lists the reasons). Changing a rule needs a new ADR.
+
