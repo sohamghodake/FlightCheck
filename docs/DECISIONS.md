@@ -141,3 +141,55 @@ Format:
   had marked Rich, Uvicorn, Jinja2 and ruff as unverified; they are now verified as above. No
   lock file is committed in Phase 0; the plan's `uv.lock` / `requirements-lock.txt` is deferred to a
   later phase.
+
+## ADR-010 — Report schema 1.0 is frozen for the MVP; additive changes only
+
+- Date: 2026-11-06 · Phase: 1 · Status: accepted
+- Context: Reports are consumed by CI, by `explain`, by the HTML renderer and by users' own
+  tooling. Changing field meanings between phases would break saved reports and later sessions.
+- Decision: `core/models.py` defines report schema `"1.0"` (`ReportMetadata.schema_version`).
+  Until v0.1.0 ships, changes are additive only: new optional fields, new enum members, tighter
+  types for the three placeholder fields listed in ADR-023. No field is renamed or removed and no
+  status meaning changes. A breaking change needs a new ADR and schema `"2.0"`.
+- Consequences: Phase 3 exports `docs/report.schema.json` from `Report.model_json_schema()` and a
+  drift test keeps them in sync.
+
+## ADR-023 — Core conventions settled in Phase 1
+
+- Date: 2026-11-06 · Phase: 1 · Status: accepted
+- Context: The plan leaves some details of configuration, redaction and the report models open.
+  ADR numbers 011–022 are reserved by the plan for decisions in later phases, so this record uses
+  the next free number.
+- Decision:
+  1. **Secret-looking config keys.** `load_config` rejects any key (in `flightcheck.toml` or CLI
+     overrides) whose name matches `(?i)(api_?key|token|secret|password)` *and* whose value is a
+     non-empty string. Keys ending in `_env` name an environment variable and are allowed
+     (`api_key_env`); non-string values are allowed (`max_output_tokens = 4000`). The error
+     message never includes the value.
+  2. **API keys.** `ProviderConfig.api_key` is a `SecretStr` filled only from the environment
+     variable named by `api_key_env`, excluded from `model_dump`/JSON and from `repr`. The value
+     is also passed to `register_secret`, so redaction catches it even where no pattern matches.
+  3. **Environment overrides.** Only these map onto config: `FLIGHTCHECK_PROVIDER` → `provider`,
+     `FLIGHTCHECK_LLM` → `explain.llm`, `FLIGHTCHECK_MODEL` → `explain.model`,
+     `FLIGHTCHECK_CONTEXT` → `explain.context`. Empty values are ignored. `FLIGHTCHECK_NO_NETWORK`
+     and `FLIGHTCHECK_LIVE` are runtime switches, not config. New mappings are added here.
+  4. **TOML layout.** `[project] provider` maps to `FlightCheckConfig.provider`.
+     `[providers.<name>]` tables merge onto the built-in `bharatcode` profile (partial overrides
+     allowed); other provider names must give `kind` and `base_url`. Unknown keys are errors
+     (`extra="forbid"`).
+  5. **Redaction order.** Registered secrets, then secret-looking environment values, then
+     patterns, so a pattern never partially rewrites a known value first. Redaction is idempotent.
+  6. **Logging.** The `RedactingFilter` sits on the handler (logger-level filters do not see
+     records from child loggers) and redacts the formatted message, tracebacks and stack info.
+  7. **Placeholder types** (to be tightened by the owning phase, additive under ADR-010):
+     `ScenarioResult.exchanges: list[dict]` → `RecordedExchange` (Phase 5A);
+     `Report.capability_profile: dict | None` → `CapabilityProfile` (Phase 6);
+     `ProviderConfig.declared_capabilities: dict[str, bool]` → `dict[Capability, bool]` (Phase 6);
+     `Report.ai_suggestions: list[dict]` → `AISuggestion` (Phase 8).
+  8. **Model details.** `Evidence.excerpt` is truncated to 2 000 characters (with `…`) rather
+     than rejected. `ReportMetadata.generated_at` must be timezone-aware. `Summary` lists only
+     non-zero counts, in enum order; `highest_severity` covers all findings, hypotheses included
+     (CI gating applies its own hypothesis rule). Scan size limits use binary units
+     (1 MB = 1 MiB).
+- Consequences: Later phases build on these without re-deciding them. Changes require a new ADR
+  that supersedes the relevant item.

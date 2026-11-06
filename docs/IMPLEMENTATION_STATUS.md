@@ -3,7 +3,7 @@
 | Phase | Title                                                                     | Status      | Date       | Commit                                         | Notes                                                    |
 | ----- | ------------------------------------------------------------------------- | ----------- | ---------- | ---------------------------------------------- | -------------------------------------------------------- |
 | 0     | Scope freeze, repository bootstrap, continuity docs                       | done        | 2026-11-06 | `chore: bootstrap repository (phase 0)`        | Gates green on 3.11 and 3.12 locally; see PHASE_00.md     |
-| 1     | Core foundation: models, config, errors, logging, redaction, paths        | not started |            |                                                |                                                          |
+| 1     | Core foundation: models, config, errors, logging, redaction, paths        | done        | 2026-11-06 | `feat(core): models, config, redaction, logging, paths (phase 1)` | 99 tests; ADR-010, ADR-023; see PHASE_01.md |
 | 2     | Discovery, AST index, provider detection                                  | not started |            |                                                |                                                          |
 | 3     | Rule engine, BharatCode contract rules, `scan`, JSON + terminal output    | not started |            |                                                | First vertical slice                                     |
 | 4     | Robustness and security rules, fixture suite, evaluation script           | not started |            |                                                |                                                          |
@@ -19,25 +19,29 @@
 | 12    | Documentation, demo, `BharatCode.txt`, submission                         | not started |            |                                                | Early run on Day 2, final run on Day 4                   |
 
 The commit column names the phase commit by its message; find its hash with
-`git log --oneline --grep "phase 0"`.
+`git log --oneline --grep "phase <N>"`.
 
 ## Current state
 
 - Working commands: `flightcheck --version` and `python -m flightcheck --version` (print
   `flightcheck 0.1.0`); `flightcheck --help` lists the four P0 commands as coming in later phases.
   No other commands exist yet.
-- Package: `src/flightcheck/{__init__,__main__}.py`, `src/flightcheck/cli/{__init__,app}.py`.
-- Tests: 3 (`tests/cli/test_version.py`); `FLIGHTCHECK_NO_NETWORK=1` is set for every test.
+- Package: `src/flightcheck/{__init__,__main__}.py`, `cli/{__init__,app}.py`, and
+  `core/{models,config,errors,logging,redact,paths}.py` (stdlib + pydantic only, enforced by
+  `tests/unit/test_core_imports.py`).
+- Tests: 99 (`tests/cli`, `tests/unit`); `FLIGHTCHECK_NO_NETWORK=1` is set for every test.
+- Placeholder types to tighten later (ADR-023 item 7): `ScenarioResult.exchanges` (Phase 5A),
+  `Report.capability_profile` and `ProviderConfig.declared_capabilities` (Phase 6),
+  `Report.ai_suggestions` (Phase 8).
 - CI: `.github/workflows/ci.yml` (ruff check, ruff format --check, pytest, on 3.11/3.12/3.13).
-  Not yet run on GitHub: Phase 0 was committed locally and not pushed.
+  Not yet run on GitHub: the push is blocked (GitHub access for `sohamghodake/FlightCheck`).
 - Known broken: nothing.
 - BharatCode key available: no (never paste the key).
 - Plan: `docs/FLIGHTCHECK_IMPLEMENTATION_PHASE_PLAN.md`, local-only and git-ignored (ADR-000).
 
 ## Next phase
 
-- Phase 1: Core foundation — models, config, errors, logging, redaction, paths. Prompt in plan
-  §28 ("Prompt — Phase 1").
+- Phase 2: Discovery, AST index, provider detection. Prompt in plan §28 ("Prompt — Phase 2").
 
 ## Dropped / deferred (per plan §7.3)
 
