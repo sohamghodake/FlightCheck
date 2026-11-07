@@ -425,3 +425,50 @@ Format:
   rules; Phase 7 validators read `response_summary` keys (`finish`, `call_ids`, `no_tools`,
   `auth`, `violations`, `error_code`).
 
+## ADR-015 — Mock streaming modelled on OpenAI event shapes until golden transcripts exist
+
+- Date: 2026-11-07 · Phase: 5B · Status: accepted
+- Context: BharatCode documents only the Responses event names that matter to a client
+  (`response.output_text.delta`; `response.completed` / `response.incomplete` end a stream;
+  `response.failed` is an error; keepalive comments are not output; a busy model that already
+  started streaming ends with `response.failed`). Payload fields, the other event names and the
+  whole Chat Completions stream format are not documented (BHARATCODE_CONTRACT.md §15.1).
+- Decision:
+  1. **Responses SSE** (`event: <name>\ndata: <json>\n\n`) follows OpenAI's sequence:
+     `response.created`, `response.in_progress`, `response.output_item.added`,
+     `response.content_part.added`, `response.output_text.delta` × n (word-sized pieces),
+     `response.output_text.done`, `response.content_part.done`, `response.output_item.done`,
+     then `response.completed` or `response.incomplete`. Tool calls use
+     `response.function_call_arguments.delta` × n (8-character pieces) and `.done`; a truncated
+     tool call has no `.done` and ends with `response.incomplete`. The terminal event's
+     `response` is exactly the non-stream body for the same step. `sequence_number` counts from
+     0. Everything except the documented names is **[UNVERIFIED]**.
+  2. **`STREAM_FAIL_AFTER`**: Responses sends `n` text deltas (default 2) then `response.failed`
+     with `error.code = "server_error"`. Chat sends a role chunk and `n` content chunks, then ends
+     the body cleanly with no finish chunk and no `[DONE]` (Chat has no documented failure
+     event; a clean end is deterministic and is what an abrupt close looks like to an SSE
+     reader).
+  3. **Chat SSE** (`data: <chunk>\n\n`, OpenAI convention, **[UNVERIFIED]**): a role chunk,
+     content or tool-call argument chunks, a chunk with `finish_reason` (`stop`, `tool_calls`,
+     `length`), then `data: [DONE]`. No usage chunk.
+  4. **`KEEPALIVE_STREAM`** puts `: keepalive` before every chunk, so the first bytes a client
+     sees are a comment (as when queued). The exact comment text is **[UNVERIFIED]**; FlightCheck's
+     own parser treats any comment as a keepalive (plan §14.6).
+  5. **Non-stream actions on a stream request:** `HTTP_ERROR` is a JSON error before the stream
+     starts (BharatCode's documented busy 503); `DELAY` waits before the first byte.
+  6. **Recording:** a stream is recorded once, when the response ends (a `StreamingResponse`
+     subclass calls the recorder in `finally`), with `finish`, `call_ids`, `terminal_event` /
+     `finish_reason` / `done_sent`, `keepalives`, `chunks_sent` and `chunks_planned`. A client
+     that leaves early gives `finish: "client_disconnected"` plus `planned_finish`. Because the
+     exchange is appended after the last byte, readers use the recorder after
+     `MockServer.stop()`, which waits for in-flight requests.
+  7. **`MockServer`** binds a socket to `127.0.0.1:0` itself and passes it to `uvicorn.Server`
+     (no port race), runs it in a daemon thread with `http="h11"`, `lifespan="off"`,
+     `timeout_graceful_shutdown=2`, waits ≤ 5 s for `started` (else `MockServerError`, exit 3,
+     message names the port), and on stop sets `should_exit`, joins ≤ 5 s, then `force_exit`.
+     Uvicorn 0.54 skips signal handlers off the main thread (`Server.capture_signals`), so
+     nothing is disabled.
+- Consequences: The OpenAI SDK parses every stream, including its `responses.stream()`
+  helper. When the Phase 10 probe records real BharatCode streams, golden transcripts replace
+  these shapes wherever they differ, and this ADR is superseded.
+

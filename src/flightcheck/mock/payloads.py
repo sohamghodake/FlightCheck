@@ -10,11 +10,13 @@ documented fields is [UNVERIFIED] for BharatCode.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from flightcheck.core.config import BHARATCODE_DEFAULT_MODEL, BHARATCODE_DOCUMENTED_MODELS
-from flightcheck.mock.faults import MockStep
+from flightcheck.mock.faults import MockAction, MockStep
 
 Headers = dict[str, str]
 Built = tuple[int, Headers, dict[str, Any]]
@@ -414,3 +416,302 @@ CHAT_BUILDERS: dict[str, Builder] = {
     "truncated": chat_truncated,
     "truncated_tool_call": chat_truncated_tool_call,
 }
+
+
+# --- Streaming (Phase 5B) -------------------------------------------------------------------
+#
+# Event names documented for BharatCode (§15.1 "Responses — streaming"): response.output_text.delta
+# carries text; response.completed / response.incomplete end a stream; response.failed is an
+# error; keepalive comments are not model output. Every other event name and every payload field
+# follows OpenAI's Responses event shapes and is [UNVERIFIED] for BharatCode (ADR-015). The extra
+# OpenAI events (output_item.added, content_part.added, ...) are included because the OpenAI
+# SDK's ``responses.stream()`` helper needs them to accumulate output.
+#
+# Chat Completions streaming (``data: {chunk}`` lines and ``data: [DONE]``) is entirely
+# [UNVERIFIED] for BharatCode (OpenAI convention).
+
+KEEPALIVE = b": keepalive\n\n"  # the exact comment text BharatCode sends is [UNVERIFIED]
+DONE = b"data: [DONE]\n\n"
+DEFAULT_FAIL_AFTER = 2
+_ARGUMENT_PIECE = 8
+
+
+@dataclass(frozen=True)
+class SSEStream:
+    """A complete stream: SSE chunks in order plus the outcome to record when it ends."""
+
+    headers: Headers
+    chunks: list[bytes]
+    outcome: dict[str, Any]
+
+
+def sse_event(event: str, data: dict[str, Any]) -> bytes:
+    return f"event: {event}\ndata: {json.dumps(data, separators=(',', ':'))}\n\n".encode()
+
+
+def sse_data(data: dict[str, Any]) -> bytes:
+    return f"data: {json.dumps(data, separators=(',', ':'))}\n\n".encode()
+
+
+def stream_headers(seq: int) -> Headers:
+    return {**base_headers(seq), "cache-control": "no-cache"}
+
+
+def text_pieces(text: str) -> list[str]:
+    """Word-sized deltas (whitespace kept) whose concatenation is ``text``."""
+    pieces = re.findall(r"\S+\s*|\s+", text)
+    return pieces or [""]
+
+
+def argument_pieces(arguments: str) -> list[str]:
+    return [
+        arguments[i : i + _ARGUMENT_PIECE] for i in range(0, len(arguments), _ARGUMENT_PIECE)
+    ] or [""]
+
+
+def fail_after(step: MockStep) -> int:
+    """``STREAM_FAIL_AFTER``'s ``n``: how many deltas are sent before the failure."""
+    n = step.params.get("n", DEFAULT_FAIL_AFTER)
+    if isinstance(n, bool) or not isinstance(n, int) or n < 0:
+        raise ValueError("STREAM_FAIL_AFTER step needs a non-negative integer 'n'")
+    return n
+
+
+_STREAM_KIND = {
+    MockAction.TOOL_CALL: "tool_call",
+    MockAction.TRUNCATE: "truncated",
+    MockAction.TRUNCATE_TOOL_CALL: "truncated_tool_call",
+}
+
+
+def _with_keepalives(chunks: list[bytes]) -> list[bytes]:
+    """A keepalive comment before every chunk (queued requests see them before any event)."""
+    out: list[bytes] = []
+    for chunk in chunks:
+        out.extend((KEEPALIVE, chunk))
+    return out
+
+
+class _ResponsesEvents:
+    """Builds one Responses SSE sequence with increasing ``sequence_number`` values."""
+
+    def __init__(self) -> None:
+        self.chunks: list[bytes] = []
+        self._seq = 0
+
+    def add(self, event: str, **fields: Any) -> None:
+        self.chunks.append(
+            sse_event(event, {"type": event, "sequence_number": self._seq, **fields})
+        )
+        self._seq += 1
+
+
+def _in_progress(body: dict[str, Any]) -> dict[str, Any]:
+    return {
+        **body,
+        "status": "in_progress",
+        "incomplete_details": None,
+        "output": [],
+        "usage": None,
+    }
+
+
+def _stream_message(events: _ResponsesEvents, item: dict[str, Any], pieces: list[str]) -> None:
+    item_id = item["id"]
+    text = "".join(pieces)
+    _stream_message_partial(events, item, pieces)
+    events.add(
+        "response.output_text.done",
+        item_id=item_id,
+        output_index=0,
+        content_index=0,
+        text=text,
+        logprobs=[],
+    )
+    events.add(
+        "response.content_part.done",
+        item_id=item_id,
+        output_index=0,
+        content_index=0,
+        part={"type": "output_text", "text": text, "annotations": []},
+    )
+    events.add("response.output_item.done", output_index=0, item=item)
+
+
+def _stream_function_call(
+    events: _ResponsesEvents, item: dict[str, Any], *, complete: bool
+) -> None:
+    item_id = item["id"]
+    events.add(
+        "response.output_item.added",
+        output_index=0,
+        item={**item, "arguments": "", "status": "in_progress"},
+    )
+    for piece in argument_pieces(item["arguments"]):
+        events.add(
+            "response.function_call_arguments.delta",
+            item_id=item_id,
+            output_index=0,
+            delta=piece,
+        )
+    if complete:  # a cut-off call never gets its arguments.done event
+        events.add(
+            "response.function_call_arguments.done",
+            item_id=item_id,
+            output_index=0,
+            arguments=item["arguments"],
+        )
+    events.add("response.output_item.done", output_index=0, item=item)
+
+
+def responses_stream(request_json: dict[str, Any], step: MockStep, seq: int) -> SSEStream:
+    """Responses SSE for every streamable action. HTTP_ERROR and DELAY are handled by the app."""
+    action = step.action
+    kind = _STREAM_KIND.get(action, "text")
+    _, _, final = RESPONSES_BUILDERS[kind](request_json, step, seq)
+    events = _ResponsesEvents()
+    events.add("response.created", response=_in_progress(final))
+    events.add("response.in_progress", response=_in_progress(final))
+    item = final["output"][0]
+    call_ids = [item["call_id"]] if item["type"] == "function_call" else []
+
+    if action is MockAction.STREAM_FAIL_AFTER:
+        pieces = text_pieces(answer_text(step))[: fail_after(step)]
+        _stream_message_partial(events, final["output"][0], pieces)
+        # Documented: a stream that has already started ends with response.failed. The error
+        # object's fields are [UNVERIFIED] (OpenAI shape).
+        failed = {
+            **final,
+            "status": "failed",
+            "output": [],
+            "error": {"code": "server_error", "message": "The model failed mid-response."},
+        }
+        events.add("response.failed", response=failed)
+        outcome = {"finish": "failed", "call_ids": [], "deltas": len(pieces)}
+    else:
+        if item["type"] == "function_call":
+            _stream_function_call(events, item, complete=final["status"] == "completed")
+        else:
+            _stream_message(events, item, text_pieces(item["content"][0]["text"]))
+        terminal = "response.completed" if final["status"] == "completed" else "response.incomplete"
+        events.add(terminal, response=final)
+        finish = {
+            ("completed", True): "tool_call",
+            ("completed", False): "completed",
+            ("incomplete", True): "truncated_tool_call",
+            ("incomplete", False): "truncated",
+        }[(final["status"], bool(call_ids))]
+        outcome = {"finish": finish, "call_ids": call_ids, "terminal_event": terminal}
+
+    chunks = events.chunks
+    if action is MockAction.KEEPALIVE_STREAM:
+        chunks = _with_keepalives(chunks)
+        outcome["keepalives"] = chunks.count(KEEPALIVE)
+    return SSEStream(stream_headers(seq), chunks, outcome)
+
+
+def _stream_message_partial(
+    events: _ResponsesEvents, item: dict[str, Any], pieces: list[str]
+) -> None:
+    """The opening events and the first deltas of a message that never finishes."""
+    item_id = item["id"]
+    events.add(
+        "response.output_item.added",
+        output_index=0,
+        item={**item, "status": "in_progress", "content": []},
+    )
+    events.add(
+        "response.content_part.added",
+        item_id=item_id,
+        output_index=0,
+        content_index=0,
+        part={"type": "output_text", "text": "", "annotations": []},
+    )
+    for piece in pieces:
+        events.add(
+            "response.output_text.delta",
+            item_id=item_id,
+            output_index=0,
+            content_index=0,
+            delta=piece,
+            logprobs=[],
+        )
+
+
+def _chat_chunk(final: dict[str, Any], delta: dict[str, Any], finish_reason: str | None) -> bytes:
+    return sse_data(
+        {
+            "id": final["id"],
+            "object": "chat.completion.chunk",
+            "created": final["created"],
+            "model": final["model"],
+            "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+        }
+    )
+
+
+def chat_stream(request_json: dict[str, Any], step: MockStep, seq: int) -> SSEStream:
+    """Chat SSE: role chunk, content or tool-call deltas, a ``finish_reason`` chunk, ``[DONE]``.
+
+    ``STREAM_FAIL_AFTER`` sends ``n`` content chunks and ends the body with no finish chunk and
+    no ``[DONE]`` (Chat has no documented failure event).
+    """
+    action = step.action
+    kind = _STREAM_KIND.get(action, "text")
+    _, _, final = CHAT_BUILDERS[kind](request_json, step, seq)
+    choice = final["choices"][0]
+    message = choice["message"]
+    tool_calls = message.get("tool_calls") or []
+    chunks: list[bytes] = []
+
+    if action is MockAction.STREAM_FAIL_AFTER:
+        pieces = text_pieces(answer_text(step))[: fail_after(step)]
+        chunks.append(_chat_chunk(final, {"role": "assistant", "content": ""}, None))
+        chunks.extend(_chat_chunk(final, {"content": p}, None) for p in pieces)
+        outcome: dict[str, Any] = {
+            "finish": "eof_without_done",
+            "call_ids": [],
+            "deltas": len(pieces),
+            "done_sent": False,
+        }
+    else:
+        if tool_calls:
+            call = tool_calls[0]
+            opening = {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "index": 0,
+                        "id": call["id"],
+                        "type": "function",
+                        "function": {"name": call["function"]["name"], "arguments": ""},
+                    }
+                ],
+            }
+            chunks.append(_chat_chunk(final, opening, None))
+            for piece in argument_pieces(call["function"]["arguments"]):
+                delta = {"tool_calls": [{"index": 0, "function": {"arguments": piece}}]}
+                chunks.append(_chat_chunk(final, delta, None))
+        else:
+            chunks.append(_chat_chunk(final, {"role": "assistant", "content": ""}, None))
+            for piece in text_pieces(message["content"]):
+                chunks.append(_chat_chunk(final, {"content": piece}, None))
+        chunks.append(_chat_chunk(final, {}, choice["finish_reason"]))
+        chunks.append(DONE)
+        truncated = choice["finish_reason"] == "length"
+        if tool_calls:
+            finish = "truncated_tool_call" if truncated else "tool_call"
+        else:
+            finish = "truncated" if truncated else "completed"
+        outcome = {
+            "finish": finish,
+            "call_ids": [c["id"] for c in tool_calls],
+            "finish_reason": choice["finish_reason"],
+            "done_sent": True,
+        }
+
+    if action is MockAction.KEEPALIVE_STREAM:
+        chunks = _with_keepalives(chunks)
+        outcome["keepalives"] = chunks.count(KEEPALIVE)
+    return SSEStream(stream_headers(seq), chunks, outcome)

@@ -23,7 +23,6 @@ from flightcheck.mock import (
     create_mock_app,
     payloads,
 )
-from flightcheck.mock.app import STREAMING_MESSAGE
 
 FAKE = "fc-fake-key-0001"
 AUTH = {"Authorization": f"Bearer {FAKE}"}
@@ -130,11 +129,12 @@ def test_every_response_carries_its_request_id(make: Make) -> None:
         client.post(f"{BASE}/responses", json=responses_req()),  # 401
         client.post(f"{BASE}/responses", content=b"{", headers=AUTH),  # 400
         client.post(f"{BASE}/responses", json=responses_req(store=True), headers=AUTH),  # 400
-        client.post(f"{BASE}/responses", json=responses_req(stream=True), headers=AUTH),  # 501
+        client.post(f"{BASE}/responses", json=responses_req(stream=True), headers=AUTH),  # SSE
         client.get(f"{BASE}/models", headers=AUTH),  # 200
         client.get("/nowhere"),  # 404
     ]
-    assert [r.status_code for r in responses] == [503, 401, 400, 400, 501, 200, 404]
+    assert [r.status_code for r in responses] == [503, 401, 400, 400, 200, 200, 404]
+    assert responses[4].headers["content-type"].startswith("text/event-stream")
     assert [r.headers["x-request-id"] for r in responses] == [f"fc_mock_{i}" for i in range(1, 8)]
     assert [e.seq for e in rec.list()] == list(range(1, 8))
 
@@ -363,7 +363,7 @@ def test_documented_400s_apply_only_to_responses(make: Make) -> None:
     assert client.post(f"{BASE}/chat/completions", json=body, headers=AUTH).status_code == 200
 
 
-def test_documented_400_before_streaming_501(make: Make) -> None:
+def test_documented_400_before_streaming(make: Make) -> None:
     client, _ = make()
     resp = client.post(
         f"{BASE}/responses", json=responses_req(store=True, stream=True), headers=AUTH
@@ -371,23 +371,7 @@ def test_documented_400_before_streaming_501(make: Make) -> None:
     assert_error(resp, 400, "unsupported_parameter")
 
 
-# --- streaming placeholder, JSON errors -----------------------------------------------------
-
-
-@pytest.mark.parametrize("path", ["responses", "chat/completions"])
-def test_stream_is_501_until_phase_5b(make: Make, path: str) -> None:
-    client, rec = make(s(MockAction.OK_TEXT))
-    body = (responses_req if path == "responses" else chat_req)(stream=True)
-    err = assert_error(
-        client.post(f"{BASE}/{path}", json=body, headers=AUTH),
-        501,
-        "flightcheck_streaming_unavailable",
-    )
-    assert err["message"] == STREAMING_MESSAGE == "streaming arrives in phase 5B"
-    ex = rec.list()[0]
-    assert ex.stream is True and ex.step_id == "stream"
-    assert client.post(f"{BASE}/{path}", json={**body, "stream": False}, headers=AUTH).json()
-    assert rec.list()[1].step_id == "step_ok_text"  # the stream request consumed nothing
+# --- JSON errors (streaming is covered in test_streaming.py) --------------------------------
 
 
 @pytest.mark.parametrize("raw", [b"{not json", b"", b"[1, 2]", b'"text"', b"\xff\xfe"])

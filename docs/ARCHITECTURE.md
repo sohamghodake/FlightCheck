@@ -4,12 +4,13 @@ This is the living description of how FlightCheck is structured. Together with
 [DECISIONS.md](DECISIONS.md) it is the source of truth: if the two disagree, the newer ADR wins and
 this file is corrected in the same commit.
 
-**Current state (Phase 5A):** `src/flightcheck/__init__.py`, `__main__.py`, `cli/app.py` (with
+**Current state (Phase 5B):** `src/flightcheck/__init__.py`, `__main__.py`, `cli/app.py` (with
 `--version`), the `core` package (`models`, `config`, `errors`, `logging`, `redact`, `paths`) and
 the scanner (`scanner/discovery`, `ast_utils`, `parser`, `detect`, `engine`,
 `rules/{bharatcode,robustness,security}`), `orchestrator.run_scan`,
-`reporting/{json_report,terminal}` and the `scan` command exist, plus the non-streaming mock
-(`mock/{faults,payloads,recorder,app}`; `mock/server.py` and streaming arrive in Phase 5B).
+`reporting/{json_report,terminal}` and the `scan` command exist, plus the complete mock
+provider (`mock/{faults,payloads,recorder,app,server}`: JSON and SSE answers, `MockServer` on
+127.0.0.1; the payload fields the OpenAI SDK needs are listed in §8).
 Contract facts shared by the scanner and the mock live in `core.config` (ADR-027). Conventions settled while building `core` are in ADR-023; scanner resolution and detection
 rules are in ADR-011 and ADR-024. Everything else below is the target design. Modules are created
 in the phase that first gives them real code; there are no placeholder modules.
@@ -141,3 +142,31 @@ P1: `ci`, `probe`, `init`, `providers`, `mock-server`. Global options: `--versio
 Exit codes: `0` completed with nothing at or above `--fail-on`; `1` completed with at least one
 finding or failed check at or above `--fail-on`; `2` usage, configuration or consent error; `3`
 internal or infrastructure error.
+
+## 8. Mock payload fields the OpenAI SDK requires
+
+Fields the official OpenAI Python SDK (3.46) marks as required, read from its pydantic models;
+the mock sends all of them (`mock/payloads.py`). Anything beyond the documented BharatCode fields
+is **[UNVERIFIED]** for BharatCode (ADR-015, ADR-027). When an SDK upgrade rejects a payload,
+read the failing type's `model_fields` and update this list with the payload.
+
+| Payload                                | Required fields                                                                                                                                         |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Response`                             | `id`, `object`, `created_at`, `model`, `output`, `parallel_tool_calls`, `tool_choice`, `tools`                                                          |
+| `ResponseUsage`                        | `input_tokens`, `input_tokens_details.{cached_tokens,cache_write_tokens}`, `output_tokens`, `output_tokens_details.reasoning_tokens`, `total_tokens` |
+| output `message` / `output_text`       | `id`, `type`, `role`, `status`, `content`; `type`, `text`, `annotations`                                                                                |
+| output `function_call`                 | `type`, `call_id`, `name`, `arguments`                                                                                                                  |
+| `response.error` (failed)              | `code` (an SDK enum: the mock sends `server_error`), `message`                                                                                          |
+| every Responses stream event           | `type`, `sequence_number`                                                                                                                               |
+| `response.created` … `.failed`         | `response`                                                                                                                                              |
+| `response.output_item.added` / `.done` | `output_index`, `item`                                                                                                                                  |
+| `response.content_part.added` / `.done` | `item_id`, `output_index`, `content_index`, `part`                                                                                                      |
+| `response.output_text.delta` / `.done` | `item_id`, `output_index`, `content_index`, `logprobs`, plus `delta` / `text`                                                                           |
+| `response.function_call_arguments.*`   | `item_id`, `output_index`, plus `delta` / `arguments`                                                                                                   |
+| `ChatCompletion`                       | `id`, `object`, `created`, `model`, `choices[].{index,message.role,finish_reason}`; usage `prompt_tokens`, `completion_tokens`, `total_tokens`           |
+| `ChatCompletionChunk`                  | `id`, `object`, `created`, `model`, `choices[].{index,delta}`; `delta.tool_calls[].index`                                                               |
+| `Model` (`GET /models`)                | `id`, `object`, `created`, `owned_by`                                                                                                                   |
+
+The SDK's `responses.stream()` helper also needs `response.output_item.added` and
+`response.content_part.added` before the first delta, so the mock sends them.
+

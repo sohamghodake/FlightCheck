@@ -1,4 +1,4 @@
-"""FastAPI app for the contract-aware BharatCode mock, non-streaming (plan §18.1, Phase 5A).
+"""FastAPI app for the contract-aware BharatCode mock (plan §18.1; Phases 5A and 5B).
 
 Order of checks per request (each failure is recorded and answered with an OpenAI-style error
 body carrying ``x-request-id``; the body shape and codes are [UNVERIFIED] for BharatCode):
@@ -10,11 +10,15 @@ body carrying ``x-request-id``; the body shape and codes are [UNVERIFIED] for Bh
 4. body not a JSON object → 400;
 5. ``/responses`` only: the documented 400s (ADR-014) — ``store: true``,
    ``previous_response_id``, non-function (hosted) tools, ``background: true``, audio/file input;
-6. ``stream: true`` → 501 until Phase 5B;
-7. the next scripted step from the :class:`FaultScript`.
+6. the next scripted step from the :class:`FaultScript`, answered as JSON or, for
+   ``stream: true``, as SSE (``text/event-stream``; ADR-015). ``HTTP_ERROR`` is a JSON error
+   even on a stream request (it happens before the stream starts); ``DELAY`` waits before the
+   first byte.
 
-Only steps that reach 7 consume the script. Handler exceptions → 500 ``flightcheck_mock_error``
-(recorded). Response bodies are passed through ``core.redact`` before they are sent.
+Only steps that reach 6 consume the script. Handler exceptions → 500 ``flightcheck_mock_error``
+(recorded). Response bodies and SSE chunks are passed through ``core.redact`` before they are
+sent. A stream is recorded when it ends, with its outcome (``finish``, ``chunks_sent``, ...) or
+``finish: "client_disconnected"`` when the client went away first.
 """
 
 from __future__ import annotations
@@ -24,13 +28,13 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from flightcheck.core.config import FILE_INPUT_KEYS, UNSUPPORTED_INPUT_TYPES
 from flightcheck.core.logging import get_logger
 from flightcheck.core.models import Endpoint
-from flightcheck.core.redact import redact_obj
+from flightcheck.core.redact import redact, redact_obj
 from flightcheck.mock import payloads
 from flightcheck.mock.faults import FaultScript, MockAction, MockStep
 from flightcheck.mock.recorder import TrafficRecorder, auth_status
@@ -38,7 +42,6 @@ from flightcheck.mock.recorder import TrafficRecorder, auth_status
 DEFAULT_BASE_PATH = "/api/model/v1"
 DEFAULT_MAX_REQUESTS = 25
 MAX_DELAY_S = 600.0
-STREAMING_MESSAGE = "streaming arrives in phase 5B"
 _INPUT_DEPTH_LIMIT = 20
 
 _log = get_logger("mock")
@@ -173,6 +176,26 @@ class _Answer:
     headers: dict[str, str] = field(default_factory=dict)
 
 
+@dataclass
+class _StreamAnswer:
+    stream: payloads.SSEStream
+
+
+class _RecordingStreamingResponse(StreamingResponse):
+    """Calls ``on_close`` once the response is over, however it ended (normal end, client
+    disconnect, cancellation), so every stream is recorded exactly once."""
+
+    def __init__(self, content: Any, on_close: Any, **kwargs: Any) -> None:
+        super().__init__(content, **kwargs)
+        self._on_close = on_close
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            self._on_close()
+
+
 def _error(status: int, message: str, code: str | None) -> _Answer:
     return _Answer(status, payloads.error_body(status, message, code))
 
@@ -210,7 +233,7 @@ class _MockService:
 
     async def handle(
         self, request: Request, endpoint: Endpoint | None, route_status: int = 404
-    ) -> JSONResponse:
+    ) -> Response:
         """Answer one request. ``endpoint=None`` is an unknown route, answered with
         ``route_status`` (404 or 405)."""
         ex = _Exchange(seq=self.recorder.next_seq(), endpoint=endpoint)
@@ -222,10 +245,17 @@ class _MockService:
             answer = _error(
                 500, f"FlightCheck mock error ({type(exc).__name__}).", "flightcheck_mock_error"
             )
+        if isinstance(answer, _StreamAnswer):
+            return self._streaming_response(request, ex, answer.stream)
         error = answer.body.get("error")
         if isinstance(error, dict):
             ex.summary.setdefault("finish", "error")
             ex.summary["error_code"] = error.get("code")
+        self._record(request, ex, answer.status)
+        headers = {**answer.headers, **payloads.base_headers(ex.seq)}
+        return JSONResponse(redact_obj(answer.body), status_code=answer.status, headers=headers)
+
+    def _record(self, request: Request, ex: _Exchange, status: int) -> None:
         self.recorder.record(
             seq=ex.seq,
             method=request.method,
@@ -237,13 +267,52 @@ class _MockService:
             raw_body=ex.raw_body,
             stream=ex.stream,
             step_id=ex.step_id,
-            response_status=answer.status,
+            response_status=status,
             response_summary=ex.summary,
         )
-        headers = {**answer.headers, **payloads.base_headers(ex.seq)}
-        return JSONResponse(redact_obj(answer.body), status_code=answer.status, headers=headers)
 
-    async def _dispatch(self, request: Request, ex: _Exchange, route_status: int) -> _Answer:
+    def _streaming_response(
+        self, request: Request, ex: _Exchange, stream: payloads.SSEStream
+    ) -> StreamingResponse:
+        chunks = [redact(chunk.decode("utf-8")).encode("utf-8") for chunk in stream.chunks]
+        state = {"sent": 0, "recorded": False}
+
+        async def body() -> Any:
+            for chunk in chunks:
+                yield chunk
+                state["sent"] += 1  # resumed only after the chunk was handed to the server
+                await asyncio.sleep(0)  # let clients see incremental delivery
+
+        def on_close() -> None:
+            if state["recorded"]:
+                return
+            state["recorded"] = True
+            # Complete = every chunk reached the server, even if the client left afterwards.
+            if state["sent"] == len(chunks):
+                ex.summary.update(stream.outcome)
+            else:
+                ex.summary.update(
+                    {
+                        "finish": "client_disconnected",
+                        "planned_finish": stream.outcome.get("finish"),
+                        "call_ids": stream.outcome.get("call_ids", []),
+                    }
+                )
+            ex.summary["chunks_sent"] = state["sent"]
+            ex.summary["chunks_planned"] = len(chunks)
+            self._record(request, ex, 200)
+
+        return _RecordingStreamingResponse(
+            body(),
+            on_close,
+            status_code=200,
+            headers=stream.headers,
+            media_type="text/event-stream",
+        )
+
+    async def _dispatch(
+        self, request: Request, ex: _Exchange, route_status: int
+    ) -> _Answer | _StreamAnswer:
         if ex.seq > self.max_requests:
             ex.step_id = "request_limit"
             return _error(
@@ -286,21 +355,19 @@ class _MockService:
                 ex.step_id = "contract"
                 ex.summary["violations"] = [v.field for v in violations]
                 return _error(400, violations[0].message, violations[0].code)
-        if ex.stream:
-            ex.step_id = "stream"
-            return _error(501, STREAMING_MESSAGE, "flightcheck_streaming_unavailable")
-
         step = self.script.next_step()
         ex.step_id = step.id
         ex.summary["action"] = str(step.action)
         return await self._serve(step, ex, parsed)
 
-    async def _serve(self, step: MockStep, ex: _Exchange, request_json: dict[str, Any]) -> _Answer:
+    async def _serve(
+        self, step: MockStep, ex: _Exchange, request_json: dict[str, Any]
+    ) -> _Answer | _StreamAnswer:
         assert ex.endpoint is not None  # only model endpoints reach a scripted step
         if step.action is MockAction.HTTP_ERROR:
             status, headers, body = payloads.http_error(request_json, step, ex.seq)
             return _Answer(status, body, headers)
-        if step.action is MockAction.STREAM_FAIL_AFTER:
+        if step.action is MockAction.STREAM_FAIL_AFTER and not ex.stream:
             status, headers, body = payloads.stream_failure(request_json, step, ex.seq)
             return _Answer(status, body, headers)
         if step.action is MockAction.DELAY:
@@ -319,6 +386,13 @@ class _MockService:
             else:
                 ex.summary["tool"] = tool[0]
                 ex.summary["tool_style"] = tool[2]
+        if ex.stream:
+            build_stream = (
+                payloads.responses_stream
+                if ex.endpoint is Endpoint.RESPONSES
+                else payloads.chat_stream
+            )
+            return _StreamAnswer(build_stream(request_json, step, ex.seq))
         builders = (
             payloads.RESPONSES_BUILDERS
             if ex.endpoint is Endpoint.RESPONSES
@@ -346,19 +420,19 @@ def create_mock_app(
     app = FastAPI(title="FlightCheck mock", docs_url=None, redoc_url=None, openapi_url=None)
 
     @app.get(f"{base}/models")
-    async def list_models(request: Request) -> JSONResponse:
+    async def list_models(request: Request) -> Response:
         return await service.handle(request, Endpoint.MODELS)
 
     @app.post(f"{base}/responses")
-    async def responses(request: Request) -> JSONResponse:
+    async def responses(request: Request) -> Response:
         return await service.handle(request, Endpoint.RESPONSES)
 
     @app.post(f"{base}/chat/completions")
-    async def chat_completions(request: Request) -> JSONResponse:
+    async def chat_completions(request: Request) -> Response:
         return await service.handle(request, Endpoint.CHAT_COMPLETIONS)
 
     @app.exception_handler(StarletteHTTPException)
-    async def unknown_route(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+    async def unknown_route(request: Request, exc: StarletteHTTPException) -> Response:
         status = exc.status_code if exc.status_code in (404, 405) else 404
         return await service.handle(request, None, status)
 
