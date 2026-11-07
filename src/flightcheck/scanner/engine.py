@@ -26,7 +26,11 @@ from flightcheck.core.models import (
     Verification,
 )
 from flightcheck.core.redact import redact
-from flightcheck.scanner.ast_utils import SEGMENT_MAX_LEN
+from flightcheck.scanner.ast_utils import (
+    SEGMENT_MAX_LEN,
+    is_placeholder_key,
+    prefixed_secrets,
+)
 from flightcheck.scanner.detect import DetectionResult
 from flightcheck.scanner.parser import CallSite, RepoIndex, decode_source
 
@@ -59,6 +63,34 @@ class RuleContext:
     bharatcode_mode: BharatCodeMode = "auto"
     diagnostics: list[Diagnostic] = field(default_factory=list)
     _sources: dict[str, list[str]] = field(default_factory=dict, repr=False)
+    # Hard-coded key literals found before rules run (ADR-026): raw value -> replacement.
+    # ``mask`` applies them to every excerpt and message, then ``core.redact``.
+    secrets: dict[str, str] = field(default_factory=dict, repr=False)
+
+    def collect_secrets(self) -> None:
+        """Record every literal FC-SEC-001 treats as a key, so no rule can echo it."""
+        for file in self.index.files:
+            for literal in file.string_literals:
+                for value, replacement in prefixed_secrets(literal.value):
+                    self.secrets.setdefault(value, replacement)
+            for keyed in file.keyed_literals:
+                if not is_placeholder_key(keyed.value):
+                    self.secrets.setdefault(keyed.value, "[REDACTED]")
+
+    def mask(self, text: str) -> str:
+        """``text`` with collected key literals replaced, then passed through ``redact``.
+
+        Values shorter than 4 characters are replaced only in quoted form (``"abc"``), so a
+        short key cannot mangle unrelated text.
+        """
+        for value in sorted(self.secrets, key=len, reverse=True):
+            replacement = self.secrets[value]
+            if len(value) >= 4:
+                text = text.replace(value, replacement)
+            else:
+                for quote in ('"', "'"):
+                    text = text.replace(f"{quote}{value}{quote}", f"{quote}{replacement}{quote}")
+        return redact(text)
 
     def provider_of(self, call: CallSite) -> ProviderDetection | None:
         return self.detection.call_sites.get(call.id)
@@ -97,7 +129,7 @@ class RuleContext:
         text = textwrap.dedent("\n".join(lines[location.line - 1 : end])).strip("\n")
         if len(text) > SEGMENT_MAX_LEN:
             text = text[: SEGMENT_MAX_LEN - 1] + "…"
-        return redact(text)
+        return self.mask(text)
 
     def finding(
         self,
@@ -109,11 +141,29 @@ class RuleContext:
         confidence: Confidence | None = None,
     ) -> Finding:
         """A finding at ``call`` with source and documentation evidence."""
-        loc = call.location
+        return self.finding_at(
+            meta, call.location, message, severity=severity, confidence=confidence, call=call
+        )
+
+    def finding_at(
+        self,
+        meta: RuleMeta,
+        location: Location,
+        message: str,
+        *,
+        severity: Severity | None = None,
+        confidence: Confidence | None = None,
+        call: CallSite | None = None,
+    ) -> Finding:
+        """A finding at any ``location`` (dict literal, print call, client constructor, …).
+
+        ``call`` (optional) names the related call site for the finding's ``provider``.
+        """
+        loc = location
         evidence = [Evidence(type="source", location=loc, excerpt=self.excerpt(loc))]
         if meta.doc_source:
             evidence.append(Evidence(type="documentation", note=f"Documented at {meta.doc_source}"))
-        detection = self.provider_of(call)
+        detection = self.provider_of(call) if call is not None else None
         return Finding(
             id=Finding.make_id(meta.id, loc.path, loc.line, loc.column),
             rule_id=meta.id,
@@ -122,7 +172,7 @@ class RuleContext:
             verification=Verification.STATIC,
             severity=severity or meta.default_severity,
             confidence=confidence or meta.default_confidence,
-            message=redact(message),
+            message=self.mask(message),
             location=loc,
             evidence=evidence,
             remediation=meta.remediation,
@@ -184,9 +234,13 @@ def _call_id(location: Location | None) -> str | None:
     return f"{location.path}:{location.line}:{location.column}"
 
 
-def _downgrade_for_provider(finding: Finding, ctx: RuleContext) -> Finding:
-    """Lower confidence one level when the call site's provider confidence is ``low``."""
-    if ctx.bharatcode_mode == "forced":
+def _downgrade_for_provider(finding: Finding, ctx: RuleContext, meta: RuleMeta) -> Finding:
+    """Lower confidence one level when the call site's provider confidence is ``low``.
+
+    Only provider-specific rules are downgraded: an unsure provider says nothing about a
+    provider-independent (``"*"``) rule such as FC-GEN-004 (ADR-026).
+    """
+    if ctx.bharatcode_mode == "forced" or ALL_PROVIDERS in meta.providers:
         return finding
     call_id = _call_id(finding.location)
     detection = ctx.detection.call_sites.get(call_id) if call_id else None
@@ -211,6 +265,7 @@ def run_rules(
 ) -> list[Finding]:
     """Run enabled rules; one crashing rule produces an ``error`` diagnostic, never aborts."""
     reg = load_builtin_rules() if registry is None else registry
+    ctx.collect_secrets()
     findings: list[Finding] = []
     for rule_id in select_rules(rule_ids, reg):
         meta, fn = reg[rule_id]
@@ -223,16 +278,17 @@ def run_rules(
                 Diagnostic(
                     level="error",
                     code="rule_crashed",
-                    message=redact(f"Rule {rule_id} crashed: {type(exc).__name__}: {exc}"),
+                    message=ctx.mask(f"Rule {rule_id} crashed: {type(exc).__name__}: {exc}"),
                 )
             )
             continue
-        findings.extend(_downgrade_for_provider(f, ctx) for f in produced)
+        findings.extend(_downgrade_for_provider(f, ctx, meta) for f in produced)
     kept = [f for f in findings if f.severity.rank >= min_severity.rank]
     return sorted(kept, key=sort_key)
 
 
 __all__ = [
+    "ALL_PROVIDERS",
     "RuleContext",
     "RuleFn",
     "RuleMeta",

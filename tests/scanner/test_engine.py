@@ -23,6 +23,10 @@ from flightcheck.scanner.engine import (
 )
 from flightcheck.scanner.parser import RepoIndex, build_index, parse_source
 
+# Phase 3 engine tests check BharatCode behaviour only; FC-GEN/FC-SEC rules also fire on these
+# tmp files (no try/except, no timeout), so the tests narrow to the BC rules.
+BC_IDS = [f"FC-BC-00{n}" for n in range(1, 9)]
+
 BC_CLIENT = (
     "import os\n"
     "from openai import OpenAI\n"
@@ -66,10 +70,22 @@ def test_duplicate_rule_id_fails() -> None:
 def test_builtin_registry_has_bc_rules_with_doc_source() -> None:
     registry = load_builtin_rules()
     for rule_id, (meta, _) in registry.items():
+        if not rule_id.startswith("FC-BC-"):
+            continue
         assert meta.id == rule_id
         assert meta.doc_source == "https://bharatcode.ai/build"
         assert meta.remediation
         assert meta.providers == frozenset({"bharatcode"})
+
+
+def test_builtin_gen_and_sec_rules_run_on_every_provider() -> None:
+    registry = load_builtin_rules()
+    others = {rule_id: meta for rule_id, (meta, _) in registry.items() if rule_id[:6] != "FC-BC-"}
+    assert others
+    for rule_id, meta in others.items():
+        assert meta.id == rule_id and meta.remediation
+        assert meta.providers == frozenset({"*"})
+        assert meta.category == ("security" if rule_id.startswith("FC-SEC-") else "robustness")
 
 
 def test_unknown_rule_id_lists_valid_ids() -> None:
@@ -115,7 +131,7 @@ def test_findings_sorted_by_path_line_rule(tmp_path: Path) -> None:
     _write(tmp_path, "b.py", BC_CLIENT + calls)
     _write(tmp_path, "a.py", BC_CLIENT + "\n" + calls + calls)
     index, ctx = _ctx(tmp_path)
-    findings = run_rules(index, ctx)
+    findings = run_rules(index, ctx, rule_ids=BC_IDS)
     keys = [(f.location.path, f.location.line, f.rule_id) for f in findings]
     assert keys == sorted(keys)
     assert keys[0] == ("a.py", 5, "FC-BC-001")
@@ -126,8 +142,8 @@ def test_findings_sorted_by_path_line_rule(tmp_path: Path) -> None:
 def test_min_severity_and_rule_filter(tmp_path: Path) -> None:
     _write(tmp_path, "a.py", BC_CLIENT + 'client.responses.create(model="gpt-4o", input="x")\n')
     index, ctx = _ctx(tmp_path)
-    assert {f.rule_id for f in run_rules(index, ctx)} == {"FC-BC-006", "FC-BC-007"}
-    medium = run_rules(index, ctx, min_severity=Severity.MEDIUM)
+    assert {f.rule_id for f in run_rules(index, ctx, rule_ids=BC_IDS)} == {"FC-BC-006", "FC-BC-007"}
+    medium = run_rules(index, ctx, rule_ids=BC_IDS, min_severity=Severity.MEDIUM)
     assert [f.rule_id for f in medium] == ["FC-BC-006"]
     only = run_rules(index, ctx, rule_ids=["FC-BC-007"])
     assert [f.rule_id for f in only] == ["FC-BC-007"]
@@ -135,8 +151,8 @@ def test_min_severity_and_rule_filter(tmp_path: Path) -> None:
 
 def test_finding_ids_are_stable(tmp_path: Path) -> None:
     _write(tmp_path, "a.py", BC_CLIENT + 'client.responses.create(model="m", input="x")\n')
-    first = run_rules(*_ctx(tmp_path))
-    second = run_rules(*_ctx(tmp_path))
+    first = run_rules(*_ctx(tmp_path), rule_ids=BC_IDS)
+    second = run_rules(*_ctx(tmp_path), rule_ids=BC_IDS)
     assert [f.id for f in first] == [f.id for f in second]
     assert first[0].id == Finding.make_id("FC-BC-006", "a.py", 4, 0)
 
@@ -153,18 +169,18 @@ OTHER = (
 
 def test_bc_rules_skip_non_bharatcode_call_sites(tmp_path: Path) -> None:
     _write(tmp_path, "a.py", OTHER)
-    assert run_rules(*_ctx(tmp_path)) == []
+    assert run_rules(*_ctx(tmp_path), rule_ids=BC_IDS) == []
 
 
 def test_forced_bharatcode_runs_everywhere_without_downgrade(tmp_path: Path) -> None:
     _write(tmp_path, "a.py", OTHER)
-    findings = run_rules(*_ctx(tmp_path, "forced"))
+    findings = run_rules(*_ctx(tmp_path, "forced"), rule_ids=BC_IDS)
     assert {f.rule_id for f in findings} == {"FC-BC-001", "FC-BC-006"}
 
 
 def test_disabled_bharatcode_runs_nothing(tmp_path: Path) -> None:
     _write(tmp_path, "a.py", BC_CLIENT + 'client.responses.create(model="m", store=True)\n')
-    assert run_rules(*_ctx(tmp_path, "disabled")) == []
+    assert run_rules(*_ctx(tmp_path, "disabled"), rule_ids=BC_IDS) == []
 
 
 def test_low_provider_confidence_downgrades_one_level(tmp_path: Path) -> None:
@@ -178,20 +194,24 @@ def test_low_provider_confidence_downgrades_one_level(tmp_path: Path) -> None:
     index, ctx = _ctx(tmp_path)
     call = next(c for c in index.call_sites if c.location.path == "app.py")
     assert ctx.provider_of(call).confidence is Confidence.LOW
-    findings = run_rules(index, ctx)
+    findings = run_rules(index, ctx, rule_ids=BC_IDS)
     assert [(f.rule_id, f.confidence) for f in findings] == [("FC-BC-001", Confidence.MEDIUM)]
 
 
 def test_provider_override_via_run_scan(tmp_path: Path) -> None:
     _write(tmp_path, "a.py", OTHER)
     config = FlightCheckConfig()
-    forced = run_scan(ScanRequest(root=tmp_path, provider_override="bharatcode"), config)
+    forced = run_scan(
+        ScanRequest(root=tmp_path, rule_ids=BC_IDS, provider_override="bharatcode"), config
+    )
     assert {f.rule_id for f in forced.findings} == {"FC-BC-001", "FC-BC-006"}
     _write(tmp_path, "a.py", BC_CLIENT + 'client.responses.create(model="m", store=True)\n')
-    off = run_scan(ScanRequest(root=tmp_path, provider_override="openai_compatible"), config)
+    off = run_scan(
+        ScanRequest(root=tmp_path, rule_ids=BC_IDS, provider_override="openai_compatible"), config
+    )
     assert off.findings == []
     with pytest.raises(ConfigError):
-        run_scan(ScanRequest(root=tmp_path, provider_override="nope"), config)
+        run_scan(ScanRequest(root=tmp_path, rule_ids=BC_IDS, provider_override="nope"), config)
 
 
 def test_run_scan_missing_path(tmp_path: Path) -> None:
@@ -267,7 +287,7 @@ def test_one_hop_still_sees_outer_literals_when_not_shadowed() -> None:
 
 def test_shadowed_tools_produce_no_finding(tmp_path: Path) -> None:
     _write(tmp_path, "a.py", SHADOW_HEAD + "def f(TOOLS):\n" + SHADOW_CALL)
-    assert [f.rule_id for f in run_rules(*_ctx(tmp_path))] == ["FC-BC-006"]
+    assert [f.rule_id for f in run_rules(*_ctx(tmp_path), rule_ids=BC_IDS)] == ["FC-BC-006"]
 
 
 def test_base_url_constant_respects_local_shadowing() -> None:

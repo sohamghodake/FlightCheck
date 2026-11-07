@@ -7,6 +7,7 @@ only, and everything else is reported as :class:`Unknown`.
 from __future__ import annotations
 
 import ast
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -125,3 +126,54 @@ def string_fragments(node: ast.AST, resolve_name: NameResolver | None = None) ->
         resolved = resolve_name(node.id)
         return [resolved] if resolved is not None else []
     return []
+
+
+# --- Name and secret classification (Phase 4: FC-SEC-001/002 and excerpt masking) ----------
+
+_WORD = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+")
+_CREDENTIAL_WORDS = frozenset({"apikey", "secret", "token", "authorization"})
+
+# Prefixed key patterns (FC-SEC-001). ``bc_live_`` is the BharatCode prefix [OBSERVED].
+SECRET_PREFIX_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"(?<![A-Za-z0-9])bc_live_[A-Za-z0-9_\-]{8,}"), "bc_live_…[REDACTED]"),
+    (re.compile(r"(?<![A-Za-z0-9])sk-[A-Za-z0-9_\-]{16,}"), "sk-…[REDACTED]"),
+)
+# Placeholder values (compared lower-cased) are reported as info. The prefixed one is split so
+# FlightCheck's own source holds no literal its FC-SEC-001 would match (dogfood gate, §26.2).
+PLACEHOLDER_KEYS = frozenset(
+    {"", "empty", "dummy", "test", "your_key_here", "bc_live_" + "your_key_here"}
+)
+
+
+def name_words(name: str) -> list[str]:
+    """``OPENAI_API_KEY`` → ``["openai", "api", "key"]``; ``apiKey`` → ``["api", "key"]``."""
+    return [word.lower() for word in _WORD.findall(name)]
+
+
+def is_api_key_name(name: str) -> bool:
+    """``api_key``, ``apiKey``, ``OPENAI_API_KEY``, ``x-api-key``: words end in api + key."""
+    words = name_words(name)
+    return words[-2:] == ["api", "key"] or (bool(words) and words[-1] == "apikey")
+
+
+def is_credential_name(name: str) -> bool:
+    """A name that looks like a credential (FC-SEC-002): api key, secret, token, authorization.
+
+    Matching is by whole word, so ``total_tokens``/``max_tokens`` are not credentials.
+    """
+    words = name_words(name)
+    if any(a == "api" and b == "key" for a, b in zip(words, words[1:], strict=False)):
+        return True
+    return any(word in _CREDENTIAL_WORDS for word in words)
+
+
+def is_placeholder_key(value: str) -> bool:
+    return value.strip().lower() in PLACEHOLDER_KEYS
+
+
+def prefixed_secrets(value: str) -> list[tuple[str, str]]:
+    """``(matched key, masked replacement)`` for every prefixed key inside ``value``."""
+    found: list[tuple[str, str]] = []
+    for pattern, replacement in SECRET_PREFIX_PATTERNS:
+        found.extend((match.group(0), replacement) for match in pattern.finditer(value))
+    return found

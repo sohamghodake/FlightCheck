@@ -21,6 +21,8 @@ from flightcheck.core.models import Diagnostic, Location
 from flightcheck.scanner.ast_utils import (
     Unknown,
     attr_chain,
+    is_api_key_name,
+    is_credential_name,
     literal_value,
     source_segment,
     split_attrs,
@@ -63,6 +65,11 @@ SDK_CALL_SUFFIXES: dict[tuple[str, ...], CallKind] = {
 RAW_URL_MARKERS = {"/responses": "responses", "/chat/completions": "chat.completions"}
 
 Resolution = Literal["function", "module", "class_attr", "inline"]
+# Calls whose result is a string for FC-GEN-007 (a tool output must be a string).
+STRING_PRODUCERS = frozenset({"json.dumps", "str", "repr"})
+LOG_METHODS = frozenset(
+    {"debug", "info", "warning", "warn", "error", "exception", "critical", "log"}
+)
 MODULE_SCOPE = "<module>"
 
 
@@ -135,6 +142,62 @@ class StringLiteral:
     location: Location
 
 
+# --- Phase 4 facts (additive; filled by the same visitor pass) -----------------------------
+
+
+@dataclass
+class KeyedLiteral:
+    """A string literal given to an API-key-like name (FC-SEC-001)."""
+
+    key: str  # "api_key", "OPENAI_API_KEY", ...
+    value: str  # raw: never written to a report without masking
+    form: Literal["kwarg", "dict_key", "assign"]
+    location: Location  # of the string literal
+    function: str | None
+
+
+@dataclass
+class StreamLoop:
+    """A ``for`` loop over a streaming call site (FC-GEN-003)."""
+
+    location: Location  # the ``for`` line
+    call_id: str
+    endpoint: Literal["responses", "chat.completions"]
+    function: str | None
+    attributes: set[str] = field(default_factory=set)  # read inside the loop body
+    strings: set[str] = field(default_factory=set)
+
+
+@dataclass
+class ArgumentsParse:
+    """``json.loads(<expr>.arguments)``, or of a name bound one hop to ``<expr>.arguments``."""
+
+    location: Location
+    function: str | None
+    in_try: bool  # lexical, as for call sites (ADR-011)
+    try_handlers: list[str]
+
+
+@dataclass
+class ToolOutputLiteral:
+    """A tool-result dict literal whose ``output``/``content`` does not look like a string."""
+
+    location: Location  # of the value
+    function: str | None
+    form: Literal["responses", "chat"]  # "function_call_output" item or "role": "tool" message
+    value: Literal["literal", "name_or_call"]  # dict/list/non-str constant, or a Name/Call
+
+
+@dataclass
+class LogCall:
+    """``print``/``logging.*``/``log(ger).*`` call referencing a credential-like name."""
+
+    location: Location
+    function: str | None
+    callee: str
+    refs: list[str]  # identifiers or environment variable names that look like credentials
+
+
 @dataclass
 class FileIndex:
     path: str  # POSIX, relative to the scan root
@@ -147,6 +210,15 @@ class FileIndex:
     string_literals: list[StringLiteral] = field(default_factory=list)
     diagnostics: list[Diagnostic] = field(default_factory=list)
     size_bytes: int = 0
+    # Phase 4 (additive). ``module_facts`` holds attributes/strings of module-level code
+    # outside any function; heuristics use it for calls with ``function=None``.
+    module_facts: FunctionFacts | None = None
+    keyed_literals: list[KeyedLiteral] = field(default_factory=list)
+    stream_loops: list[StreamLoop] = field(default_factory=list)
+    argument_parses: list[ArgumentsParse] = field(default_factory=list)
+    tool_outputs: list[ToolOutputLiteral] = field(default_factory=list)
+    log_calls: list[LogCall] = field(default_factory=list)
+    timeout_overrides: list[Location] = field(default_factory=list)  # .with_options(timeout=)
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-friendly view for debugging (raw strings included: redact before printing)."""
@@ -240,6 +312,8 @@ class _Scope:
     str_consts: dict[str, str] = field(default_factory=dict)
     env_names: dict[str, str] = field(default_factory=dict)  # name -> env var it was read from
     containers: dict[str, Any] = field(default_factory=dict)  # name -> list/dict/tuple literal
+    stream_calls: dict[str, CallSite] = field(default_factory=dict)  # name -> stream=True call
+    arg_names: dict[str, bool] = field(default_factory=dict)  # name -> bound to `.arguments`
     # Every name bound in this scope so far (any value, parameters, loop targets): a binding
     # here shadows outer scopes even when its value is not a constant FlightCheck can use.
     bound: set[str] = field(default_factory=set)
@@ -277,6 +351,15 @@ class _IndexVisitor(ast.NodeVisitor):
         self.scopes: list[_Scope] = [self.module]
         self.pending: list[_Pending] = []
         self.inline: dict[int, ClientBinding] = {}  # id(ctor Call node) -> binding
+        self.call_nodes: dict[int, CallSite] = {}  # id(Call node) -> call site
+        self.active_loops: list[StreamLoop] = []
+        self.index.module_facts = FunctionFacts(
+            qualname=MODULE_SCOPE,
+            location=Location(path=path, line=1, column=0),
+            class_name=None,
+            is_async=False,
+            decorators=[],
+        )
 
     # -- helpers ---------------------------------------------------------------------------
 
@@ -326,7 +409,8 @@ class _IndexVisitor(ast.NodeVisitor):
     def _lookup(self, name: str, table: str) -> Any:
         """One-hop value of ``name`` from the nearest scope that binds it, else ``None``.
 
-        ``table`` is ``"str_consts"``, ``"containers"`` or ``"env_names"``. The nearest binding
+        ``table`` is ``"str_consts"``, ``"containers"``, ``"env_names"``, ``"stream_calls"``
+        or ``"arg_names"``. The nearest binding
         wins even when its value is unusable (``x = make()``, a parameter), so an outer
         constant is never seen through a local rebinding.
         """
@@ -353,9 +437,14 @@ class _IndexVisitor(ast.NodeVisitor):
         for node in ast.walk(target):
             if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
                 scope.bound.add(node.id)
-                scope.str_consts.pop(node.id, None)
-                scope.containers.pop(node.id, None)
-                scope.env_names.pop(node.id, None)
+                for table in (
+                    scope.str_consts,
+                    scope.containers,
+                    scope.env_names,
+                    scope.stream_calls,
+                    scope.arg_names,
+                ):
+                    table.pop(node.id, None)
 
     def _one_hop(self, name_node: ast.AST) -> Any:
         if isinstance(name_node, ast.Name):
@@ -395,6 +484,24 @@ class _IndexVisitor(ast.NodeVisitor):
                     )
                     return key.value, kind, has_default
         return None
+
+    def _try_context(self) -> tuple[bool, list[str]]:
+        """``(in_try, handler names innermost first)`` at the current position.
+
+        A try body protects code in the same function only (a def inside a try is not
+        protected when it is later called); outside functions, module and class bodies count.
+        """
+        fn = self._function_scope()
+        owners = self.scopes[self.scopes.index(fn) :] if fn is not None else self.scopes
+        handlers: list[str] = []
+        for owner in reversed(owners):
+            for names in reversed(owner.try_stack):
+                handlers.extend(names)
+        return any(owner.try_stack for owner in owners), list(dict.fromkeys(handlers))
+
+    def _function_name(self) -> str | None:
+        fn = self._function_scope()
+        return fn.qualname if fn else None
 
     def _handler_names(self, handler: ast.ExceptHandler) -> list[str]:
         if handler.type is None:
@@ -545,10 +652,38 @@ class _IndexVisitor(ast.NodeVisitor):
 
     def _visit_for(self, node: ast.For | ast.AsyncFor) -> None:
         self.visit(node.iter)
+        stream_call = self._stream_call_of(node.iter)
         self._shadow(node.target)
         self.visit(node.target)
-        for stmt in [*node.body, *node.orelse]:
+        loop: StreamLoop | None = None
+        if stream_call is not None:
+            loop = StreamLoop(
+                location=Location(
+                    path=self.path, line=node.lineno, column=node.col_offset, end_line=node.lineno
+                ),
+                call_id=stream_call.id,
+                endpoint=stream_call.endpoint,
+                function=self._function_name(),
+            )
+            self.index.stream_loops.append(loop)
+            self.active_loops.append(loop)
+        for stmt in node.body:
             self.visit(stmt)
+        if loop is not None:
+            self.active_loops.pop()
+        for stmt in node.orelse:
+            self.visit(stmt)
+
+    def _stream_call_of(self, node: ast.AST) -> CallSite | None:
+        """The ``stream=True`` call site ``node`` evaluates to (inline or one hop), if any."""
+        if isinstance(node, ast.Await):
+            node = node.value
+        if isinstance(node, ast.Call):
+            call = self.call_nodes.get(id(node))
+            return call if call is not None and call.stream is True else None
+        if isinstance(node, ast.Name):
+            return self._lookup(node.id, "stream_calls")
+        return None
 
     visit_For = _visit_for
     visit_AsyncFor = _visit_for
@@ -575,6 +710,20 @@ class _IndexVisitor(ast.NodeVisitor):
                 scope.env_names[target.id] = env
             else:
                 scope.env_names.pop(target.id, None)
+            stream_call = self._stream_call_of(value)
+            if stream_call is not None:
+                scope.stream_calls[target.id] = stream_call
+            else:
+                scope.stream_calls.pop(target.id, None)
+            if isinstance(value, ast.Attribute) and value.attr == "arguments":
+                scope.arg_names[target.id] = True
+            else:
+                scope.arg_names.pop(target.id, None)
+        key_name = target.id if isinstance(target, ast.Name) else None
+        if isinstance(target, ast.Attribute):
+            key_name = target.attr
+        if key_name and is_api_key_name(key_name):
+            self._keyed(key_name, value, "assign")
         binding = self.inline.get(id(value)) if isinstance(value, ast.Call) else None
         if binding is None:
             return
@@ -597,13 +746,82 @@ class _IndexVisitor(ast.NodeVisitor):
     # -- facts -----------------------------------------------------------------------------
 
     def _record_fact(self, attr: str | None = None, string: str | None = None) -> None:
-        for scope in self.scopes:
-            if scope.facts is None:
-                continue
+        targets: list[FunctionFacts | StreamLoop] = [
+            scope.facts for scope in self.scopes if scope.facts is not None
+        ]
+        if not targets and self.index.module_facts is not None:
+            targets.append(self.index.module_facts)
+        targets.extend(self.active_loops)
+        for target in targets:
             if attr is not None:
-                scope.facts.attributes.add(attr)
+                target.attributes.add(attr)
             if string is not None:
-                scope.facts.strings.add(string)
+                target.strings.add(string)
+
+    def _keyed(self, key: str, value: ast.AST, form: str) -> None:
+        if isinstance(value, ast.Constant) and isinstance(value.value, str):
+            self.index.keyed_literals.append(
+                KeyedLiteral(
+                    key=key,
+                    value=value.value,
+                    form=form,  # type: ignore[arg-type]
+                    location=_loc(self.path, value),
+                    function=self._function_name(),
+                )
+            )
+
+    def visit_Dict(self, node: ast.Dict) -> None:
+        entries: dict[str, ast.AST] = {}
+        for key, value in zip(node.keys, node.values, strict=True):
+            if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                entries[key.value] = value
+                if is_api_key_name(key.value):
+                    self._keyed(key.value, value, "dict_key")
+        self._tool_output(entries)
+        self.generic_visit(node)
+
+    def _tool_output(self, entries: dict[str, ast.AST]) -> None:
+        def const(name: str) -> object:
+            node = entries.get(name)
+            return node.value if isinstance(node, ast.Constant) else None
+
+        if const("type") == "function_call_output" and "output" in entries:
+            form, value = "responses", entries["output"]
+        elif const("role") == "tool" and "content" in entries:
+            form, value = "chat", entries["content"]
+        else:
+            return
+        shape = self._non_string_shape(value)
+        if shape is not None:
+            self.index.tool_outputs.append(
+                ToolOutputLiteral(
+                    location=_loc(self.path, value),
+                    function=self._function_name(),
+                    form=form,  # type: ignore[arg-type]
+                    value=shape,  # type: ignore[arg-type]
+                )
+            )
+
+    def _non_string_shape(self, node: ast.AST) -> str | None:
+        """``"literal"`` (dict/list/non-str constant), ``"name_or_call"``, or None (string-ish)."""
+        if isinstance(node, ast.Dict | ast.List | ast.Tuple | ast.Set):
+            return "literal"
+        if isinstance(node, ast.Constant):
+            return None if isinstance(node.value, str) else "literal"
+        if isinstance(node, ast.Call):
+            if self.qualify(node.func) in STRING_PRODUCERS:
+                return None
+            func = node.func
+            if (
+                isinstance(func, ast.Attribute)
+                and func.attr in ("format", "join")
+                and isinstance(func.value, ast.Constant)
+            ):
+                return None
+            return "name_or_call"
+        if isinstance(node, ast.Name):
+            return "name_or_call"
+        return None  # f-strings, concatenation, attributes, subscripts: not judged
 
     def visit_Attribute(self, node: ast.Attribute) -> None:
         self._record_fact(attr=node.attr)
@@ -645,7 +863,75 @@ class _IndexVisitor(ast.NodeVisitor):
             self._add_client(node, callee)
         if isinstance(node.func, ast.Attribute):
             self._maybe_call_site(node)
+        self._phase4_call_facts(node, callee)
         self.generic_visit(node)
+
+    def _phase4_call_facts(self, node: ast.Call, callee: str | None) -> None:
+        for kw in node.keywords:
+            if kw.arg is not None and is_api_key_name(kw.arg):
+                self._keyed(kw.arg, kw.value, "kwarg")
+        if isinstance(node.func, ast.Attribute) and node.func.attr == "with_options":
+            if any(kw.arg == "timeout" for kw in node.keywords):
+                self.index.timeout_overrides.append(_loc(self.path, node))
+        if callee == "json.loads" and node.args and self._is_arguments(node.args[0]):
+            in_try, handlers = self._try_context()
+            self.index.argument_parses.append(
+                ArgumentsParse(
+                    location=_loc(self.path, node),
+                    function=self._function_name(),
+                    in_try=in_try,
+                    try_handlers=handlers,
+                )
+            )
+        log_name = self._log_callee(node.func, callee)
+        if log_name is not None:
+            refs = self._credential_refs(node)
+            if refs:
+                self.index.log_calls.append(
+                    LogCall(
+                        location=_loc(self.path, node),
+                        function=self._function_name(),
+                        callee=log_name,
+                        refs=refs,
+                    )
+                )
+
+    def _is_arguments(self, node: ast.AST) -> bool:
+        if isinstance(node, ast.BoolOp):
+            return any(self._is_arguments(value) for value in node.values)
+        if isinstance(node, ast.Attribute):
+            return node.attr == "arguments"
+        if isinstance(node, ast.Name):
+            return bool(self._lookup(node.id, "arg_names"))
+        return False
+
+    def _log_callee(self, func: ast.AST, callee: str | None) -> str | None:
+        if callee == "print":
+            return "print"
+        chain = attr_chain(func)
+        if not chain or len(chain) < 2 or chain[-1] not in LOG_METHODS:
+            return None
+        if callee is not None and callee.startswith("logging."):
+            return callee
+        if chain[-2].lower() in ("log", "logger"):
+            return ".".join(chain)
+        return None
+
+    def _credential_refs(self, node: ast.Call) -> list[str]:
+        refs: list[str] = []
+        for arg in [*node.args, *(kw.value for kw in node.keywords)]:
+            for sub in ast.walk(arg):
+                name: str | None = None
+                if isinstance(sub, ast.Name):
+                    name = sub.id
+                elif isinstance(sub, ast.Attribute):
+                    name = sub.attr
+                if name and is_credential_name(name):
+                    refs.append(name)
+                read = self._env_read(sub)
+                if read is not None and is_credential_name(read[0]):
+                    refs.append(read[0])
+        return list(dict.fromkeys(refs))
 
     def _add_client(self, node: ast.Call, constructor: str) -> None:
         kwargs: dict[str, Any] = {}
@@ -739,14 +1025,7 @@ class _IndexVisitor(ast.NodeVisitor):
         else:
             stream = bool(stream_value)
         fn = self._function_scope()
-        # A try body protects calls in the same function only (a def inside a try is not
-        # protected when it is later called); outside functions, module and class bodies count.
-        owners = self.scopes[self.scopes.index(fn) :] if fn is not None else self.scopes
-        handlers: list[str] = []
-        for owner in reversed(owners):
-            for names in reversed(owner.try_stack):
-                handlers.extend(names)
-        in_try = any(owner.try_stack for owner in owners)
+        in_try, handlers = self._try_context()
         receiver_text = source_segment(self.source, base, 120)
         if receiver_attrs:
             receiver_text += "." + ".".join(receiver_attrs)
@@ -766,12 +1045,13 @@ class _IndexVisitor(ast.NodeVisitor):
             function=fn.qualname if fn else None,
             class_name=self._class_name(),
             in_try=in_try,
-            try_handlers=list(dict.fromkeys(handlers)),
+            try_handlers=handlers,
             decorators=list(fn.facts.decorators) if fn and fn.facts else [],
             is_async_function=bool(fn and fn.facts and fn.facts.is_async),
             one_hop=one_hop,
         )
         self.index.call_sites.append(call)
+        self.call_nodes[id(node)] = call
         self.pending.append(
             _Pending(call=call, receiver_node=receiver_node, scopes=list(self.scopes))
         )

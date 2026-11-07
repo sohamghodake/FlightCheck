@@ -11,7 +11,7 @@ from typer.testing import CliRunner
 from flightcheck.cli.app import app
 from flightcheck.cli.render import FailOn, exceeds_fail_on
 from flightcheck.core.errors import ConfigError
-from flightcheck.core.models import Report
+from flightcheck.core.models import Report, Severity
 from flightcheck.reporting.json_report import REPORT_FILENAME, read_report, write_report
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -48,7 +48,7 @@ def test_fail_on_none_exits_zero(tmp_path: Path) -> None:
 
 
 def test_bad_fixture_exits_one_with_terminal_output(tmp_path: Path) -> None:
-    code, out = _scan(str(RULES / "FC-BC-001"), "--output", str(tmp_path))
+    code, out = _scan(str(RULES / "FC-BC-001"), "--rule", "FC-BC-001", "--output", str(tmp_path))
     assert code == 1
     assert "FlightCheck 0.1.0 · scan" in out
     assert "Providers: bharatcode (high" in out
@@ -60,7 +60,7 @@ def test_bad_fixture_exits_one_with_terminal_output(tmp_path: Path) -> None:
 
 def test_good_fixture_exits_zero(tmp_path: Path) -> None:
     target = RULES / "FC-BC-001" / "good_store_false.py"
-    code, out = _scan(str(target), "--output", str(tmp_path))
+    code, out = _scan(str(target), "--rule", "FC-BC-001", "--output", str(tmp_path))
     assert code == 0, out
     assert "No findings" in out
     assert "1 file scanned" in out
@@ -68,10 +68,12 @@ def test_good_fixture_exits_zero(tmp_path: Path) -> None:
 
 def test_hypotheses_need_fail_on_hypotheses(tmp_path: Path) -> None:
     target = str(RULES / "FC-BC-007")
-    code, out = _scan(target, "--fail-on", "low", "--output", str(tmp_path))
+    only = ("--rule", "FC-BC-007")
+    code, out = _scan(target, *only, "--fail-on", "low", "--output", str(tmp_path))
     assert code == 0
     assert "hypothesis · medium" in out and "[UNVERIFIED]" in out
-    code, _ = _scan(target, "--fail-on", "low", "--fail-on-hypotheses", "--output", str(tmp_path))
+    flags = ("--fail-on", "low", "--fail-on-hypotheses", "--output", str(tmp_path))
+    code, _ = _scan(target, *only, *flags)
     assert code == 1
 
 
@@ -110,13 +112,19 @@ def test_rule_filter_and_min_severity(tmp_path: Path) -> None:
     assert {f.rule_id for f in report.findings} == {"FC-BC-006"}
     _scan(str(RULES), "--min-severity", "high", "--format", "json", "--output", str(out_dir))
     report = read_report(out_dir / REPORT_FILENAME)
-    assert report.findings and all(f.severity.value == "high" for f in report.findings)
+    assert report.findings and all(f.severity.rank >= Severity.HIGH.rank for f in report.findings)
+    assert {f.severity.value for f in report.findings} == {"high", "critical"}
 
 
 def test_provider_openai_compatible_disables_bc_rules(tmp_path: Path) -> None:
-    code, out = _scan(str(RULES), "--provider", "openai_compatible", "--output", str(tmp_path))
-    assert code == 0
-    assert "No findings" in out
+    code, out = _scan(
+        str(RULES / "FC-BC-001"), "--provider", "openai_compatible", "--output", str(tmp_path)
+    )
+    report = read_report(tmp_path / REPORT_FILENAME)
+    assert code == 1, out  # FC-SEC-001 (high) on good_other_provider.py still counts
+    assert not [f for f in report.findings if f.rule_id.startswith("FC-BC-")]
+    # provider-independent rules (FC-GEN/FC-SEC) are not disabled by the override
+    assert {f.rule_id for f in report.findings} >= {"FC-GEN-004", "FC-GEN-005"}
 
 
 def test_output_path_that_is_a_file_exits_two(tmp_path: Path) -> None:
@@ -141,7 +149,11 @@ def test_exceeds_fail_on_thresholds(tmp_path: Path) -> None:
     _scan(str(RULES), "--format", "json", "--output", str(tmp_path))
     report = read_report(tmp_path / REPORT_FILENAME)
     assert exceeds_fail_on(report, FailOn.HIGH, include_hypotheses=False)
-    assert not exceeds_fail_on(report, FailOn.CRITICAL, include_hypotheses=False)
+    assert exceeds_fail_on(report, FailOn.CRITICAL, include_hypotheses=False)  # FC-SEC-001
+    bc_only = report.model_copy(
+        update={"findings": [f for f in report.findings if f.rule_id.startswith("FC-BC-")]}
+    )
+    assert not exceeds_fail_on(bc_only, FailOn.CRITICAL, include_hypotheses=False)
     assert not exceeds_fail_on(report, FailOn.NONE, include_hypotheses=True)
     only_hypotheses = report.model_copy(
         update={"findings": [f for f in report.findings if f.kind.value == "hypothesis"]}

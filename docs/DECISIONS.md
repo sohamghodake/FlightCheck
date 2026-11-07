@@ -301,3 +301,56 @@ Format:
   `python -m flightcheck.reporting.json_report docs/report.schema.json` and kept in step by
   `tests/unit/test_schema_export.py`; the repository has no JSON Schema validator dependency,
   so reports are validated with `Report.model_validate` (the schema's source).
+
+## ADR-013 — Heuristic rules carry ≤ medium confidence and "not observed in this function" wording
+
+- Date: 2026-11-07 · Phase: 4 · Status: accepted
+- Context: FC-GEN-001/002/003/006 look only at the attributes and strings of the function that
+  makes the call (ADR-011: lexical, no inter-procedural flow). A check performed in a helper,
+  a wrapper library or a caller is invisible to them.
+- Decision: These rules never use `high` confidence and their messages say "… not observed in
+  `<function>`" (or "in module-level code"), never "missing". Calls at module level
+  (`CallSite.function is None`) use `FileIndex.module_facts`: the attributes and strings of
+  module-level code outside any function (a check inside a function does not count for them).
+  A known false positive (finish_reason checked in a helper) is kept as the fixture app
+  `known_fp_helper_check`, recorded in the manifest *with* its finding so changes are visible.
+- Consequences: Users can tell heuristics from contract facts. `tests/scanner/test_rules_fixtures.py`
+  asserts the confidence ceiling and the wording.
+
+## ADR-026 — Secret masking in the rule context; GEN/SEC detection details
+
+- Date: 2026-11-07 · Phase: 4 · Status: accepted
+- Context: Every excerpt goes through `core.redact`, which misses short or dict-form literals
+  (`api_key="abc"`, `{"api_key": "abc12345"}`), so any rule whose excerpt covers such a line
+  (FC-GEN-005 on the client, FC-GEN-004 on the call) would print the key.
+- Decision:
+  1. **Masking hook on `RuleContext`, not the global registry.** Before rules run,
+     `run_rules` calls `RuleContext.collect_secrets()`: every prefixed key (`bc_live_…`,
+     `sk-…`) inside any string literal and every non-placeholder literal given to an
+     API-key-like name (kwarg, dict key or assignment). `RuleContext.mask()` replaces them in
+     every excerpt, finding message and `rule_crashed` diagnostic, then applies `redact`.
+     Values shorter than 4 characters are replaced only in quoted form. Nothing global is
+     changed, so no state leaks between scans or tests.
+  2. **FC-SEC-001** detects prefixed literals (critical/high) and literals given to `api_key=`,
+     a dict key or a name whose words end in "api key" (`OPENAI_API_KEY`, `apiKey`;
+     high/medium). The plan names only `api_key=`; the dict and assignment forms are the same
+     mistake and are needed for masking anyway. Placeholders (`""`, `EMPTY`, `dummy`, `test`,
+     `your_key_here`, `bc_live_your_key_here`, case-insensitive) are `info`. Prefix patterns
+     require a non-alphanumeric character before the prefix (`task-…` is not `sk-…`).
+  3. **FC-SEC-002** matches credential-like names by whole word (`api`+`key`, `apikey`,
+     `secret`, `token`, `authorization`), not by substring, so `usage.total_tokens` and
+     `max_tokens` are not credentials. Receivers: `print`, `logging.<method>`, and any
+     `log`/`logger` receiver with a logging method name.
+  4. **Low provider confidence lowers only provider-specific rules.** The ADR-025 downgrade
+     is skipped for rules with `providers={"*"}`: an unsure provider says nothing about
+     whether a call has a `try` or a client has a timeout.
+  5. **FC-GEN-007** judges only literal shapes: dict/list/tuple/set or a non-string constant →
+     high/high; a bare name or a call other than `json.dumps`/`str`/`repr`/`"…".format`/
+     `"…".join` → high/low; f-strings, concatenation, attributes and subscripts are not judged.
+  6. **FC-GEN-005** checks `openai.OpenAI`/`AsyncOpenAI` and `httpx`/`httpx2` clients (not
+     `requests.Session`, which has no client-level timeout); any `.with_options(timeout=…)` in
+     the file suppresses it. `**kwargs` in the constructor is not seen (a possible false
+     positive).
+- Consequences: Planted secrets of every form are absent from JSON, terminal output and every
+  finding (`tests/security/test_scan_redaction.py`). FlightCheck's own source avoids literals its
+  FC-SEC-001 would match (the dogfood gate).
