@@ -1,0 +1,6 @@
+# Runtime test settings for this fixture (plan §17.2). No [project] table: declaring a provider
+# would change the static scan results. "python" must be on PATH (the tests put the venv's
+# interpreter first); FlightCheck runs exactly this command, never through a shell.
+[test]
+command = ["python", "main.py", "What is the weather in Delhi?"]
+timeout_s = 20

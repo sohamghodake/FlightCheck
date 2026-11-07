@@ -19,9 +19,11 @@ client = OpenAI(
 )
 
 
-def ask(question: str) -> str:
+def ask(question: str, saved_response_id: str = "resp_saved_conversation") -> str:
     try:
-        first = client.responses.create(model=MODEL, input=question, store=True)
+        first = client.responses.create(
+            model=MODEL, input=question, previous_response_id=saved_response_id, store=True
+        )
         follow_up = client.responses.create(
             model=MODEL,
             input="Now answer again in one sentence.",

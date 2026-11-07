@@ -575,3 +575,94 @@ Format:
      the built URL must start with the base URL, so the key never leaves the configured host.
 - Consequences: Phase 8 (`explain`) and Phase 10 (probe) use `build_adapter` and these types
   without re-deciding them; the probe upgrades entries to `*_verified`.
+
+## ADR-017 — Runtime checks run only via consented subprocess; no in-process import of user code
+
+- Date: 2026-11-07 · Phase: 7A · Status: accepted
+- Context: Runtime evidence needs the developer's app to run. Importing it into FlightCheck's
+  process would give it FlightCheck's environment (real keys included), let it patch FlightCheck
+  itself, and make crashes, hangs and `sys.exit` FlightCheck's problem.
+- Decision: Repository code runs only through `runtime/harness.run_app`: the `[test].command`
+  list, `shell=False`, `cwd` resolved inside the project root, a scrubbed allowlist environment
+  (§20.7) with the mock URL, a fresh fake key `fc_fake_key_<random>` and a dead-proxy egress
+  guard, stdin written then closed, a new session/process group killed as a whole on timeout
+  (terminate → 3 s → kill) and after exit. `orchestrator.run_test` calls `ensure_consent` before
+  anything else; without `allow_exec=True` it raises `ConsentRequiredError` (exit 2) with the
+  ready-to-paste hint `flightcheck test <path> --allow-exec`. `subprocess` is imported nowhere
+  in `src/` except `runtime/harness.py`, and `runtime` imports only `core` and `mock`; both are
+  enforced by AST tests in `tests/runtime/test_harness.py`. The interpreter is whatever the
+  command names (`use_current_python` is P1).
+- Consequences: The egress guard is best effort, not a sandbox: it stops HTTP clients that
+  honour the proxy variables (httpx2 and the OpenAI SDK, `trust_env=True`), not raw sockets or
+  file access. Memory/CPU limits are not enforced (§20.7, P2). On Windows, grandchild cleanup
+  relies on `taskkill /T` (untested).
+
+## ADR-018 — Outcomes without explicit expectations are needs_review, never passed
+
+- Date: 2026-11-07 · Phase: 7A · Status: accepted
+- Context: Many runtime outcomes (does the app continue after a tool call? did it exit
+  non-zero for a good reason?) are correct or not depending on the app's intent. Calling them
+  `passed` would claim verification FlightCheck did not do (§20.14).
+- Decision: A check is `passed` only when its criterion is crisp and was observed, and it
+  carries at least one evidence item (the model enforces it). Otherwise:
+  app-specific outcomes with no `[test.expect]` entry → `needs_review` with the observation
+  (FC-RT-011 no follow-up, FC-RT-008 non-zero exit under S01, FC-RT-001 omitted `store`,
+  FC-RT-041 SDK-only backoff); no recorded traffic → `skipped` with the §17.2 reason; an
+  incomplete recording turns a would-be `passed` into `needs_review` (an absence cannot be
+  confirmed) while an observed failure stays `failed`; an app with no tools under S04 →
+  `unsupported`. Statuses are never collapsed; a scenario's status is `worst_status` of the
+  checks it reports.
+- Consequences: `needs_review` is common in reports and is not a failure for CI gating. Phase
+  7B's `[test.expect]` handling (S03/S06) follows the same rule.
+
+## ADR-029 — Runtime conventions settled in Phase 7A
+
+- Date: 2026-11-07 · Phase: 7A · Status: accepted
+- Context: The plan leaves open where the pre-flight lives, how "reported once" works, how to
+  attribute retries to the OpenAI SDK, what S01's exit-code expectation is attached to, and what
+  to do with scenario IDs this phase does not implement.
+- Decision:
+  1. **Pre-flight in the orchestrator.** `runtime` may not import the scanner, so
+     `orchestrator.hardcoded_base_urls(index)` reads the scanner's index: a client whose
+     `base_url` is a literal or one-hop constant with a non-local host (not read from an
+     environment variable, even with a literal default), or a raw HTTP call to a literal
+     absolute non-local URL. Any hit → no mock, no process; every reported check `skipped` with
+     the `file:line` in the reason, plus a `test_preflight_refused` warning diagnostic.
+     `DetectionResult` exposes no URL locations, so the scanner is unchanged.
+  2. **Every-scenario checks reported once.** FC-RT-001…007, FC-RT-050 and FC-RT-060 are
+     evaluated in every scenario; `validators.report_once` keeps a failed/needs_review result
+     only if it names an offending request not yet reported for that check (key:
+     `request_sha256`; for FC-RT-060, scenario + seq, because limited requests carry no body and
+     a breach belongs to its scenario), always keeps a failure without offending requests, keeps
+     a pass only if that check was not yet observed, and keeps a skip/unsupported/error only if
+     nothing was kept for that check. So a scenario whose own checks were skipped (e.g. after a
+     contract 400) is not shown as `passed` on the strength of a check another scenario showed.
+  3. **SDK retry attribution.** The OpenAI SDK (3.46.0) retries 503/429 twice by default with
+     0.5 s·2ⁿ backoff minus up to 25 % jitter (`openai/_constants.py`,
+     `openai/_base_client.py:898-920`) and sends `x-stainless-retry-count` (kept by the
+     recorder). FC-RT-040 is `passed` when ≥ 2 attempts are seen and says when the SDK did the
+     retrying. FC-RT-041 is `needs_review` whenever every retry carries a retry count > 0,
+     whatever the measured gap (the first SDK gap measured 440–510 ms, so a fixed 500 ms
+     threshold would flap); `failed` (< 500 ms) / `passed` apply to the app's own retries.
+  4. **FC-RT-008 "Baseline run exits 0" (new ID, S01 only, severity info).** §18.3 says S01
+     with a non-zero exit is `needs_review` but names no check; a scenario's status must come
+     from its checks, so this ID carries it: exit 0 after ≥ 1 model request → `passed`; non-zero,
+     timeout, or exit 0 without traffic → `needs_review`. Never `failed`, so never mirrored.
+  5. **Unimplemented scenarios.** S03/S05/S06 (Phase 7B) and S02b/S07–S10 (P1) are known IDs: a
+     selected one yields an info `scenario_not_implemented` diagnostic, not a `ScenarioResult`.
+     Any other ID is a `ConfigError`. `TestRequest.scenarios=None` uses `[test].scenarios`.
+  6. **Request limit.** The harness polls the recorder and stops the app once it has more than
+     `max_requests` exchanges (FC-RT-060 `failed`, "FlightCheck stopped the app"), instead of
+     waiting for the timeout.
+  7. **Other details.** One fresh fake key, mock and child per scenario; scripts use step IDs
+     `baseline`, `busy_1`, `busy_2`, `recover`, `tool_call`, `answer` with `scenario` params, so
+     call IDs are `call_fc_S04_<seq>`. FC-RT-007 with `deepseek-v4.1-flash` → `needs_review`
+     (severity info: Pro only). Chat continuation checks (FC-RT-014) say [UNVERIFIED] and mirror
+     at `medium` confidence; list content in a Chat tool message → `needs_review`. Failed checks
+     mirror as `Finding(kind=runtime, verification=runtime_mock, location=None,
+     check_ref=<CheckResult.id>, provider="bharatcode")`. Child output: invalid UTF-8 replaced,
+     the project root and home directory shown as `<name>`/`~`, redacted, then cut to 8 KB;
+     at most 1 MiB per stream is read into memory. Reports use `mock_fidelity =
+     "documentation_model"`.
+- Consequences: Phase 7B adds S03/S05/S06, `[test.expect]` and the CLI on top of these rules;
+  `tests/fixtures/expected_runtime.json` freezes the S01/S02/S04 picture per fixture app.

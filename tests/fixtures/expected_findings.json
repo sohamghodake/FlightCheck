@@ -751,7 +751,7 @@
     "FC-SEC-002/good_log_request_id.py": []
   },
   "apps": {
-    "_comment": "Fixture apps (plan \u00a725.1), scanned one app directory at a time; paths are relative to the app directory. 'clean': true means the app must produce 0 non-info findings (plan \u00a726.2).",
+    "_comment": "Fixture apps (plan §25.1), scanned one app directory at a time; paths are relative to the app directory. 'clean': true means the app must produce 0 non-info findings (plan §26.2).",
     "root": "tests/fixtures/apps",
     "items": {
       "bc_bad_budget_model": {
@@ -856,15 +856,22 @@
               "kind": "static"
             },
             {
+              "rule_id": "FC-BC-002",
+              "line": 24,
+              "severity": "high",
+              "confidence": "medium",
+              "kind": "static"
+            },
+            {
               "rule_id": "FC-BC-001",
-              "line": 25,
+              "line": 27,
               "severity": "high",
               "confidence": "high",
               "kind": "static"
             },
             {
               "rule_id": "FC-BC-002",
-              "line": 25,
+              "line": 27,
               "severity": "high",
               "confidence": "medium",
               "kind": "static"

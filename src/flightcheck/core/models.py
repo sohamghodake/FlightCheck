@@ -334,3 +334,14 @@ class ScanRequest(_Model):
     provider_override: str | None = None  # "bharatcode" | "openai_compatible" | None (auto)
     rule_ids: list[str] | None = None
     min_severity: Severity = Severity.INFO
+
+
+class TestRequest(_Model):
+    """Input to ``orchestrator.run_test`` (plan §21.4). Not part of the report schema."""
+
+    __test__ = False  # not a pytest test class
+
+    root: Path
+    allow_exec: bool  # must be True or the orchestrator raises ConsentRequiredError
+    scenarios: list[str] | None = None  # None: [test].scenarios
+    include_scan: bool = True
