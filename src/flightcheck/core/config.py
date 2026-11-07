@@ -42,6 +42,7 @@ from pydantic import (
     model_validator,
 )
 
+from flightcheck.core.capabilities import Capability
 from flightcheck.core.errors import ConfigError, ErrorKind
 from flightcheck.core.redact import register_secret
 
@@ -122,8 +123,9 @@ class ProviderConfig(_Config):
     default_model: str = BHARATCODE_DEFAULT_MODEL
     timeout: TimeoutConfig = Field(default_factory=TimeoutConfig)
     retry: RetryPolicy = Field(default_factory=RetryPolicy)
-    # Keys are Capability names; Phase 6 (providers/capabilities.py) must tighten this type.
-    declared_capabilities: dict[str, bool] = Field(default_factory=dict)
+    # [providers.<name>.declared_capabilities] in flightcheck.toml: True → DECLARED, False →
+    # DECLARED_UNSUPPORTED (providers/capabilities.py). Unknown capability names are errors.
+    declared_capabilities: dict[Capability, bool] = Field(default_factory=dict)
     # Filled by load_config from the environment only. Never serialised.
     api_key: SecretStr | None = Field(default=None, exclude=True, repr=False)
 

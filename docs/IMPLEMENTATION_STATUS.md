@@ -9,7 +9,7 @@
 | 4     | Robustness and security rules, fixture suite, evaluation script           | done        | 2026-11-07 | `feat(rules): robustness and security rules, fixture suite, eval (phase 4)` | 412 tests; ADR-013, ADR-026; see PHASE_04.md |
 | 5A    | Mock provider: payloads, faults, recorder, non-streaming endpoints        | done        | 2026-11-07 | `feat(mock): contract-aware mock, non-streaming (phase 5A)` | 544 tests; ADR-014, ADR-027; see PHASE_05A.md |
 | 5B    | Mock provider: streaming, server thread, OpenAI-SDK compatibility         | done        | 2026-11-07 | `feat(mock): streaming, server runner, SDK compatibility (phase 5B)` | 625 tests; ADR-015; see PHASE_05B.md |
-| 6     | Provider adapters and capability registry                                 | not started |            |                                                | Generic OpenAI-compatible adapter is P1                  |
+| 6     | Provider adapters and capability registry                                 | done        | 2026-11-07 | `feat(providers): BharatCode adapter and capability registry (phase 6)` | 982 tests; ADR-016, ADR-028; generic adapter (P1) not built; see PHASE_06.md |
 | 7A    | Runtime harness, validators, scenarios S01/S02/S04                        | not started |            |                                                |                                                          |
 | 7B    | Scenarios S03/S05/S06, `test` command, runtime expectations               | not started |            |                                                |                                                          |
 | 8     | AI diagnostics and `explain`                                              | not started |            |                                                | Tool-using agent is P1                                   |
@@ -36,22 +36,27 @@ The commit column names the phase commit by its message; find its hash with
   and `cli/render.py`, `scanner/rules/{robustness,security}.py` (Phase 4), and the
   mock provider `mock/{faults,payloads,recorder,app,server}.py` (`create_mock_app`,
   `FaultScript`, `TrafficRecorder`, `MockServer` on 127.0.0.1; JSON and SSE; Phases 5A/5B;
-  SDK-required payload fields in `docs/ARCHITECTURE.md` §8). Rules and
+  SDK-required payload fields in `docs/ARCHITECTURE.md` §8), `core/{capabilities,contract}.py`
+  and the provider layer `providers/{capabilities,base,http,sse,bharatcode,registry}.py`
+  (`BharatCodeAdapter`, `build_adapter`, `BHARATCODE_PROFILE`; Phase 6; sync httpx2 with an
+  injected transport and sleep; `providers` imports only `core`). Rules and
   limitations: `docs/RULES.md`; schema: `docs/report.schema.json` (drift-checked). Evaluation:
   `python scripts/eval_fixtures.py` writes `docs/EVALUATION.md`; `--check` runs the §26.2 gates. The scanner
   imports no `subprocess`/`importlib`/`runpy`/`providers`/`runtime` and calls no
   `exec`/`eval`/`compile` (enforced by `tests/scanner/test_detect.py`).
-- Tests: 625 (`tests/cli`, `tests/unit`, `tests/scanner`, `tests/security`, `tests/mock`; fixtures in
+- Tests: 982 (`tests/cli`, `tests/unit`, `tests/scanner`, `tests/security`, `tests/mock`,
+  `tests/providers`; fixtures in
   `tests/fixtures/parse`, `tests/fixtures/rules` and the 13 apps in `tests/fixtures/apps`,
   expectations in `tests/fixtures/expected_findings.json`);
   `FLIGHTCHECK_NO_NETWORK=1` is set for every test. 25 `slow` tests: the 200-file index test
   and the `MockServer` / OpenAI-SDK tests in `tests/mock` (127.0.0.1 sockets only).
-- Placeholder types to tighten later (ADR-023 item 7): `Report.capability_profile` and
-  `ProviderConfig.declared_capabilities` (Phase 6), `Report.ai_suggestions` (Phase 8).
-  `ScenarioResult.exchanges` is now `list[RecordedExchange]` (Phase 5A).
+- Placeholder types to tighten later (ADR-023 item 7): `Report.ai_suggestions` (Phase 8).
+  `ScenarioResult.exchanges` is now `list[RecordedExchange]` (Phase 5A);
+  `Report.capability_profile` is `CapabilityProfile` and `ProviderConfig.declared_capabilities`
+  is `dict[Capability, bool]` (Phase 6).
 - CI: `.github/workflows/ci.yml` (ruff check, ruff format --check, pytest, then
   `python scripts/eval_fixtures.py --check` on 3.11/3.12/3.13).
-  Phases 0–5A are pushed and CI is green on GitHub (Python 3.11/3.12/3.13); Phase 5B is
+  Phases 0–5B are pushed and CI is green on GitHub (Python 3.11/3.12/3.13); Phase 6 is
   committed locally and not yet pushed.
 - Known broken: nothing.
 - BharatCode key available: no (never paste the key).
@@ -59,8 +64,10 @@ The commit column names the phase commit by its message; find its hash with
 
 ## Next phase
 
-- Phase 6: Provider adapters and capability registry. Prompt in plan §28 ("Prompt — Phase 6");
-  start from docs/handoffs/PHASE_05B.md (use `MockServer` as the adapter test double). P1 rules (FC-BC-009, FC-GEN-008/009, FC-SEC-003) remain open.
+- Phase 7A: Runtime harness, validators, scenarios S01/S02/S04. Prompt in plan §28
+  ("Prompt — Phase 7A"); start from docs/handoffs/PHASE_06.md. Still open (P1): FC-BC-009,
+  FC-GEN-008/009, FC-SEC-003, the generic OpenAI-compatible adapter and the `providers`
+  command.
 
 ## Dropped / deferred (per plan §7.3)
 

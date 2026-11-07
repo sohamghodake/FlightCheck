@@ -4,14 +4,18 @@ This is the living description of how FlightCheck is structured. Together with
 [DECISIONS.md](DECISIONS.md) it is the source of truth: if the two disagree, the newer ADR wins and
 this file is corrected in the same commit.
 
-**Current state (Phase 5B):** `src/flightcheck/__init__.py`, `__main__.py`, `cli/app.py` (with
-`--version`), the `core` package (`models`, `config`, `errors`, `logging`, `redact`, `paths`) and
-the scanner (`scanner/discovery`, `ast_utils`, `parser`, `detect`, `engine`,
-`rules/{bharatcode,robustness,security}`), `orchestrator.run_scan`,
+**Current state (Phase 6):** `src/flightcheck/__init__.py`, `__main__.py`, `cli/app.py` (with
+`--version`), the `core` package (`models`, `config`, `errors`, `logging`, `redact`, `paths`,
+`capabilities`, `contract`) and the scanner (`scanner/discovery`, `ast_utils`, `parser`,
+`detect`, `engine`, `rules/{bharatcode,robustness,security}`), `orchestrator.run_scan`,
 `reporting/{json_report,terminal}` and the `scan` command exist, plus the complete mock
 provider (`mock/{faults,payloads,recorder,app,server}`: JSON and SSE answers, `MockServer` on
-127.0.0.1; the payload fields the OpenAI SDK needs are listed in §8).
-Contract facts shared by the scanner and the mock live in `core.config` (ADR-027). Conventions settled while building `core` are in ADR-023; scanner resolution and detection
+127.0.0.1; the payload fields the OpenAI SDK needs are listed in §8) and the provider layer
+(`providers/{capabilities,base,http,sse,bharatcode,registry}`: `BharatCodeAdapter`,
+`build_adapter`, `BHARATCODE_PROFILE`; sync, raw httpx2, injected transport and sleep; ADR-016,
+ADR-028). The generic OpenAI-compatible adapter and the `providers` command (P1) do not exist
+yet. Contract facts shared by the scanner, the mock and the adapter live in `core.config` and
+`core.contract` (ADR-027, ADR-028); capability types live in `core.capabilities`. Conventions settled while building `core` are in ADR-023; scanner resolution and detection
 rules are in ADR-011 and ADR-024. Everything else below is the target design. Modules are created
 in the phase that first gives them real code; there are no placeholder modules.
 

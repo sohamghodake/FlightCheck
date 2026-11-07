@@ -483,3 +483,95 @@ Format:
   helper. When the Phase 10 probe records real BharatCode streams, golden transcripts replace
   these shapes wherever they differ, and this ADR is superseded.
 
+
+## ADR-016 — Sync adapters; injected sleep and transport
+
+- Date: 2026-11-07 · Phase: 6 · Status: accepted
+- Context: Provider adapters must be testable with no sockets and no network
+  (`FLIGHTCHECK_NO_NETWORK=1` in every test), retries must not slow tests down, and adapters
+  must see raw SSE and headers (ADR-003). httpx2 2.16's `ASGITransport` is async-only
+  (ADR-027 item 7), but `httpx2.MockTransport` accepts a sync handler.
+- Decision:
+  1. **ADR-003 confirmed.** Adapters use httpx2 directly; `src/flightcheck/providers` imports
+     only `flightcheck.core` and itself (never `openai`, the mock, the scanner, the runtime,
+     the CLI or the orchestrator), enforced by `tests/providers/test_capabilities.py`.
+  2. **Synchronous** (ADR-002). `BharatCodeAdapter(config, transport=None, sleep=time.sleep,
+     *, jitter=None)`; `build_adapter(config, *, transport, sleep)`. All clients come from
+     `providers/http.build_client` (ADR-004), which raises `NetworkDisabledError` when
+     `FLIGHTCHECK_NO_NETWORK` is set to anything but `""`, `0`, `false`, `no` or `off` (fail
+     closed) and no transport is injected. Redirects are not followed; the key goes only into
+     `Authorization`.
+  3. **Test double:** `tests/providers/provider_bridge.py` wraps the in-process mock in an
+     `httpx2.MockTransport` whose handler forwards to `fastapi.testclient.TestClient(
+     create_mock_app(...))` and returns a fresh `httpx2.Response` with the body in 7-byte
+     chunks (headers, body and SSE bytes verified intact). No private Starlette API.
+  4. **Retries** (`send_with_retry(fn, policy, sleep, *, jitter, attempts)`): only a
+     `ProviderError` that is `retryable` *and* whose kind is in `RetryPolicy.retry_on` (503,
+     429, connection failures). Never other 4xx, 500, timeouts (a queued request may still be
+     running; this includes connect timeouts), malformed answers or truncated results. A
+     `Retry-After` header ([UNVERIFIED]) is a minimum wait; one longer than `max_delay_s` stops
+     the retries. Streams are retried only while opening (before a 2xx answer); never once the
+     answer has started. Attempts go to `NormalizedResponse.raw["_flightcheck_attempts"]` and
+     each retry is logged as a warning.
+  5. **Errors:** every error an adapter operation raises is a `ProviderError` with a redacted
+     message naming the status, code and `x-request-id`. Local pre-flight refusals are
+     `ProviderError(UNSUPPORTED_CAPABILITY)` (or `BAD_REQUEST` for a missing model or a budget
+     over 32 000) with `http_status=None`, not the `UnsupportedCapabilityError` of plan §14.1,
+     so callers handle one exception type. Construction raises `NetworkDisabledError` first,
+     then `ConfigError` when the API key is missing. 1xx/3xx answers are `MALFORMED_RESPONSE`.
+  6. **Streams:** pre-flight runs when `stream_*()` is called; the request is sent when
+     iteration starts. A `failed` event (`response.failed`, EOF without a terminal event,
+     Chat `[DONE]` without a finish_reason, an unrecognised finish_reason, an `error` chunk) is
+     yielded and then raised as `ProviderError(STREAM_FAILED)`. A stream stops at its first
+     terminal event; for Chat that is the chunk carrying `finish_reason`. Lines are split on
+     CR/LF only (`iter_text()` + `sse.iter_sse_lines`), not with `iter_lines()`, whose
+     `str.splitlines` also splits on U+2028/U+0085 that may appear unescaped in JSON.
+  7. **`Endpoint`** is the core enum (`chat.completions` value), not a second provider enum.
+- Consequences: Adapter tests are fast and socket-free; the same transport seam serves the
+  Phase 10 probe recorder. A server that labels SSE with something other than
+  `application/json` is parsed as SSE; only an explicit JSON answer to a stream request is
+  refused.
+
+## ADR-028 — Provider-layer conventions settled in Phase 6
+
+- Date: 2026-11-07 · Phase: 6 · Status: accepted
+- Context: The plan leaves where the capability types live, how `false` declarations are
+  represented and several adapter details open; core may import only stdlib and pydantic.
+- Decision:
+  1. **Capability types in core.** `Capability`, `SupportLevel`, `CapabilityEntry` and
+     `CapabilityProfile` (both frozen) live in `core/capabilities.py`;
+     `providers/capabilities.py` re-exports them and holds `BHARATCODE_PROFILE`,
+     `bharatcode_profile(base_url, declared)` and `generic_profile(declared, base_url,
+     provider)`. ADR-023 item 7 placeholders tightened (additive, ADR-010):
+     `Report.capability_profile: CapabilityProfile | None`,
+     `ProviderConfig.declared_capabilities: dict[Capability, bool]` (unknown names are config
+     errors). Schema regenerated.
+  2. **Declarations.** `true` → `declared`, `false` → new level `declared_unsupported`. The TOML
+     table is `[providers.<name>.declared_capabilities]` (the field name; the plan wrote
+     `capabilities`). On the BharatCode profile declarations fill only `unknown` entries, so a
+     documented fact cannot be declared away. Every BharatCode entry cites
+     `https://bharatcode.ai/build`; `stream_chat` and `structured_output_response_format` are
+     `unknown` (not documented).
+  3. **One contract check.** The documented `/responses` 400s moved unchanged from
+     `mock/app.py` to `core/contract.py` (`Violation`, `responses_contract_violations`); the
+     mock and the adapter both call it. The scanner keeps its own AST-level checks.
+  4. **Adapter pre-flight** = model present (documented as required) + the contract checks on
+     `/responses` + output budget ≤ 32 000 on both endpoints; a model outside the documented
+     catalogue is a logged warning once per adapter, never a refusal. Typed builders clamp the
+     budget with a warning, always send `store` on `/responses` (false unless the caller set
+     `store=True`, which pre-flight refuses), let typed fields win over `extra_body`, and set or
+     remove `stream` themselves. Capabilities a payload uses whose level is `unsupported_*` or
+     `declared_unsupported` are refused too.
+  5. **Unverified tagging:** `NormalizedResponse.unverified_capabilities` lists capabilities the
+     request used whose level is `unknown` or `declared` (plan §14.1);
+     `BharatCodeAdapter.unverified_capabilities(payload, endpoint)` gives the same for streams.
+  6. **Finish mapping details:** Chat `stop` with tool calls → `TOOL_CALLS` (OpenAI behaviour
+     for forced tool choice, [UNVERIFIED]); `tool_calls` without calls → `UNKNOWN`; a Responses
+     `function_call` item whose own `status` is not `completed` is never complete; a missing
+     `status` → `UNKNOWN`.
+  7. **`raw_post(path, json, allow_contract_violation=False) -> RawResponse`**: no rewriting,
+     clamping or retries; HTTP errors are returned (status, `x-request-id`, redacted headers,
+     body and text), not raised. The path must be relative (no scheme, `//`, `..` or `\`) and
+     the built URL must start with the base URL, so the key never leaves the configured host.
+- Consequences: Phase 8 (`explain`) and Phase 10 (probe) use `build_adapter` and these types
+  without re-deciding them; the probe upgrades entries to `*_verified`.

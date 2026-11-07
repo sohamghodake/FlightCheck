@@ -49,6 +49,102 @@
       "title": "AppRun",
       "type": "object"
     },
+    "Capability": {
+      "enum": [
+        "list_models",
+        "responses_api",
+        "chat_completions",
+        "stream_responses",
+        "stream_chat",
+        "function_tools",
+        "hosted_tools",
+        "structured_output_text_format",
+        "structured_output_response_format",
+        "store_true",
+        "previous_response_id",
+        "background",
+        "image_input",
+        "audio_input",
+        "video_input",
+        "file_input",
+        "reasoning_effort_none"
+      ],
+      "title": "Capability",
+      "type": "string"
+    },
+    "CapabilityEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "level": {
+          "$ref": "#/$defs/SupportLevel"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "note": {
+          "default": "",
+          "title": "Note",
+          "type": "string"
+        }
+      },
+      "required": [
+        "level",
+        "source"
+      ],
+      "title": "CapabilityEntry",
+      "type": "object"
+    },
+    "CapabilityProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "title": "Provider",
+          "type": "string"
+        },
+        "base_url": {
+          "title": "Base Url",
+          "type": "string"
+        },
+        "documented_models": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Documented Models",
+          "type": "array"
+        },
+        "max_output_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Output Tokens"
+        },
+        "entries": {
+          "additionalProperties": {
+            "$ref": "#/$defs/CapabilityEntry"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/Capability"
+          },
+          "title": "Entries",
+          "type": "object"
+        }
+      },
+      "required": [
+        "provider",
+        "base_url",
+        "entries"
+      ],
+      "title": "CapabilityProfile",
+      "type": "object"
+    },
     "CheckResult": {
       "additionalProperties": false,
       "properties": {
@@ -769,6 +865,19 @@
       "title": "Summary",
       "type": "object"
     },
+    "SupportLevel": {
+      "enum": [
+        "supported_documented",
+        "supported_verified",
+        "unsupported_documented",
+        "unsupported_verified",
+        "declared",
+        "declared_unsupported",
+        "unknown"
+      ],
+      "title": "SupportLevel",
+      "type": "string"
+    },
     "Verification": {
       "enum": [
         "static",
@@ -804,15 +913,13 @@
     "capability_profile": {
       "anyOf": [
         {
-          "additionalProperties": true,
-          "type": "object"
+          "$ref": "#/$defs/CapabilityProfile"
         },
         {
           "type": "null"
         }
       ],
-      "default": null,
-      "title": "Capability Profile"
+      "default": null
     },
     "findings": {
       "items": {

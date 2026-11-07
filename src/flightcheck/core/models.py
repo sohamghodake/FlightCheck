@@ -3,10 +3,11 @@
 Statuses are never collapsed: findings carry a kind and a verification level; checks carry one
 of six statuses; AI output lives in its own list and is never counted with findings or checks.
 
-Two fields are deliberately loose until the phase that owns their model exists:
+One field is deliberately loose until the phase that owns its model exists:
 
-- ``Report.capability_profile``   -> ``CapabilityProfile`` (Phase 6, providers)
 - ``Report.ai_suggestions``       -> ``AISuggestion`` / ``AIExplanation`` (Phase 8, diagnostics)
+
+``Report.capability_profile`` is a ``CapabilityProfile`` (core/capabilities.py, Phase 6).
 """
 
 from __future__ import annotations
@@ -20,6 +21,8 @@ from pathlib import Path
 from typing import Any, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from flightcheck.core.capabilities import CapabilityProfile
 
 SCHEMA_VERSION = "1.0"
 EXCERPT_LIMIT = 2000
@@ -312,8 +315,7 @@ class Report(_Model):
     metadata: ReportMetadata
     repo: RepoMetadata | None
     providers_detected: list[ProviderDetection] = Field(default_factory=list)
-    # Placeholder until Phase 6 defines CapabilityProfile; Phase 6 must tighten this type.
-    capability_profile: dict[str, Any] | None = None
+    capability_profile: CapabilityProfile | None = None
     findings: list[Finding] = Field(default_factory=list)
     scenarios: list[ScenarioResult] = Field(default_factory=list)
     diagnostics: list[Diagnostic] = Field(default_factory=list)
