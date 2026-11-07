@@ -354,3 +354,74 @@ Format:
 - Consequences: Planted secrets of every form are absent from JSON, terminal output and every
   finding (`tests/security/test_scan_redaction.py`). FlightCheck's own source avoids literals its
   FC-SEC-001 would match (the dogfood gate).
+
+## ADR-014 — Mock enforces documented 400s so apps experience the real contract
+
+- Date: 2026-11-07 · Phase: 5A · Status: accepted
+- Context: BharatCode documents five `/responses` features as unsupported with HTTP 400
+  (`store:true`, `previous_response_id`, hosted tools, background jobs, audio/video/file
+  input; BHARATCODE_CONTRACT.md §15.1). An app that uses them works against OpenAI and fails
+  only on BharatCode. A permissive mock would hide exactly the mistakes FlightCheck exists to
+  find.
+- Decision: `mock/app.py` rejects those requests on `/responses` with 400 before any scripted
+  step runs, mirroring FC-BC-001…004/008: `store is True`; `previous_response_id` present and
+  not null; any tool whose `type` is a string other than `"function"`; `background is True`;
+  `input_audio`/`input_file` items or `file_id`/`file_data` keys anywhere in `input`.
+  Look-alikes (`store:false`, omitted `store`, `previous_response_id:null`, function tools in
+  either style, `background:false`, text/image input) are accepted. All violations are
+  recorded in `response_summary["violations"]`; the first one is reported. Chat Completions
+  has no documented 400s, so none are enforced there. Error bodies use OpenAI's shape
+  `{"error": {"message", "type": "invalid_request_error", "code"}}`; that shape, the codes
+  (`unsupported_parameter`, `unsupported_tool_type`, `unsupported_input_type`) and the
+  treatment of a JSON null are **[UNVERIFIED]** until the Phase 10 probe.
+- Consequences: Runtime scenarios observe the same failure the live service would produce, and
+  a rejected request does not consume the fault script. If the probe shows different codes or
+  shapes, only `responses_contract_violations` and `payloads.error_body` change.
+
+## ADR-027 — Mock conventions settled in Phase 5A
+
+- Date: 2026-11-07 · Phase: 5A · Status: accepted
+- Context: The plan leaves the mock's guard order, recording details and test client open, and
+  the mock must not import the scanner (docs/ARCHITECTURE.md §3).
+- Decision:
+  1. **Shared contract facts in core.** `BHARATCODE_DOCUMENTED_MODELS`,
+     `BHARATCODE_PRO_ONLY_MODEL`, `UNSUPPORTED_INPUT_TYPES` and `FILE_INPUT_KEYS` moved to
+     `core/config.py`; `scanner/detect.py` re-exports the model set and the BC rules alias the
+     rest, so scanner behaviour and tests are unchanged.
+  2. **`RecordedExchange` and `Endpoint` live in `core/models.py`** (core may import only
+     stdlib and pydantic). `Endpoint` values match the scanner's call-site endpoints
+     (`responses`, `chat.completions`) plus `models`. `ScenarioResult.exchanges` is now
+     `list[RecordedExchange]` (additive under ADR-010; schema regenerated).
+  3. **Guard order:** request limit (429 `flightcheck_request_limit`, counted over every
+     request including rejected ones) → unknown route (404/405, recorded) → bearer token
+     (401 when missing, blank or not `Bearer`) → `GET /models` → JSON object body (400
+     `invalid_json`) → documented 400s (ADR-014) → `stream:true` (501
+     `flightcheck_streaming_unavailable`, "streaming arrives in phase 5B") → next scripted
+     step. Only the last consumes the script. Handler exceptions → recorded 500
+     `flightcheck_mock_error` whose message names only the exception type.
+  4. **Auth flag for FC-RT-050:** `response_summary["auth"]` is `missing`, `fake_key`,
+     `other_key` or `unchecked` (no fake key configured); the header is stored as
+     `[FAKE KEY]` only for the configured fake key, `[REDACTED]` otherwise. Other headers whose
+     name contains key/token/secret/password/cookie/auth are stored as `[REDACTED]`; every other
+     header value, the body, the path and the summary go through `core.redact`. Outgoing bodies
+     are redacted too. `request_sha256` hashes the redacted body (or the redacted raw text when
+     it is not a JSON object), so retries still hash identically.
+  5. **Non-stream meaning of stream actions:** `STREAM_FAIL_AFTER` → 500 (§18.2),
+     `KEEPALIVE_STREAM` → text, `DELAY` → `asyncio.sleep(seconds)` (0–600) then text.
+     `HTTP_ERROR` defaults to the documented 503; `retry_after` adds a `Retry-After` header
+     only when a script asks ([UNVERIFIED] for BharatCode).
+  6. **Payload details:** fixed `created_at`/`created` (2026-11-06T00:00Z) for determinism; IDs
+     `resp_fc_mock_<seq>`, `chatcmpl-fc_mock_<seq>`, `call_fc_<scenario>_<seq>`,
+     `x-request-id: fc_mock_<seq>`. Responses bodies carry the SDK-required
+     `parallel_tool_calls`, `tool_choice`, `tools: []` (request tools are not echoed) and usage
+     detail objects; truncated tool calls carry a JSON prefix that never parses. Both tool
+     styles are accepted on both endpoints (`response_summary["tool_style"]`).
+  7. **Test client:** httpx2 2.16's `ASGITransport` is async-only (`AsyncBaseTransport`), so
+     tests use FastAPI's `TestClient` (Starlette 1.10, a sync `httpx2.Client`); the OpenAI SDK
+     accepts it as `http_client`, so SDK parsing is tested in-process without sockets.
+  8. **Recorder bound:** `TrafficRecorder(max_records=1000)`; extra exchanges are counted in
+     `dropped`.
+- Consequences: Phase 5B adds streaming branches and `MockServer` without changing these
+  rules; Phase 7 validators read `response_summary` keys (`finish`, `call_ids`, `no_tools`,
+  `auth`, `violations`, `error_code`).
+

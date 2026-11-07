@@ -10,20 +10,24 @@ from __future__ import annotations
 from collections.abc import Iterator
 from typing import Any
 
-from flightcheck.core.config import MAX_OUTPUT_TOKENS_CAP
+from flightcheck.core.config import (
+    BHARATCODE_DOCUMENTED_MODELS,
+    BHARATCODE_PRO_ONLY_MODEL,
+    FILE_INPUT_KEYS,
+    MAX_OUTPUT_TOKENS_CAP,
+    UNSUPPORTED_INPUT_TYPES,
+)
 from flightcheck.core.models import Confidence, Finding, FindingKind, Severity
 from flightcheck.core.redact import redact
 from flightcheck.scanner.ast_utils import Unknown
-from flightcheck.scanner.detect import BHARATCODE_DOCUMENTED_MODELS
 from flightcheck.scanner.engine import RuleContext, RuleMeta, rule
 from flightcheck.scanner.parser import CallSite, RepoIndex
 
 DOC = "https://bharatcode.ai/build"
 CATALOGUE_DATE = "6 Nov 2026"
-PRO_ONLY_MODEL = "deepseek-v4.1-flash"
+PRO_ONLY_MODEL = BHARATCODE_PRO_ONLY_MODEL
 BC = frozenset({"bharatcode"})
-UNSUPPORTED_INPUT_TYPES = frozenset({"input_audio", "input_file"})
-FILE_KEYS = ("file_id", "file_data")
+FILE_KEYS = FILE_INPUT_KEYS
 _MODEL_DISPLAY_LIMIT = 80
 
 

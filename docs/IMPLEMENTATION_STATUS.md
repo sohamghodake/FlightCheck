@@ -7,7 +7,7 @@
 | 2     | Discovery, AST index, provider detection                                  | done        | 2026-11-06 | `feat(scanner): discovery, AST index, provider detection (phase 2)` | 213 tests; ADR-011, ADR-024; see PHASE_02.md |
 | 3     | Rule engine, BharatCode contract rules, `scan`, JSON + terminal output    | done        | 2026-11-07 | `feat: scan command with BharatCode contract rules (phase 3)` | 305 tests; ADR-012, ADR-025; see PHASE_03.md |
 | 4     | Robustness and security rules, fixture suite, evaluation script           | done        | 2026-11-07 | `feat(rules): robustness and security rules, fixture suite, eval (phase 4)` | 412 tests; ADR-013, ADR-026; see PHASE_04.md |
-| 5A    | Mock provider: payloads, faults, recorder, non-streaming endpoints        | not started |            |                                                | Can run before Phase 4 (depends on 1 only)               |
+| 5A    | Mock provider: payloads, faults, recorder, non-streaming endpoints        | done        | 2026-11-07 | `feat(mock): contract-aware mock, non-streaming (phase 5A)` | 544 tests; ADR-014, ADR-027; see PHASE_05A.md |
 | 5B    | Mock provider: streaming, server thread, OpenAI-SDK compatibility         | not started |            |                                                |                                                          |
 | 6     | Provider adapters and capability registry                                 | not started |            |                                                | Generic OpenAI-compatible adapter is P1                  |
 | 7A    | Runtime harness, validators, scenarios S01/S02/S04                        | not started |            |                                                |                                                          |
@@ -33,21 +33,23 @@ The commit column names the phase commit by its message; find its hash with
   `tests/unit/test_core_imports.py`) and `scanner/{__init__,discovery,ast_utils,parser,detect}.py`
   (`discover()`, `build_index()`, `detect()` / `detect_providers()`), `scanner/engine.py` +
   `scanner/rules/bharatcode.py`, `orchestrator.run_scan`, `reporting/{json_report,terminal}.py`
-  and `cli/render.py`, `scanner/rules/{robustness,security}.py` (Phase 4). Rules and
+  and `cli/render.py`, `scanner/rules/{robustness,security}.py` (Phase 4), and the
+  non-streaming mock `mock/{faults,payloads,recorder,app}.py` (`create_mock_app`,
+  `FaultScript`, `TrafficRecorder`; Phase 5A; stream requests answer 501 until 5B). Rules and
   limitations: `docs/RULES.md`; schema: `docs/report.schema.json` (drift-checked). Evaluation:
   `python scripts/eval_fixtures.py` writes `docs/EVALUATION.md`; `--check` runs the §26.2 gates. The scanner
   imports no `subprocess`/`importlib`/`runpy`/`providers`/`runtime` and calls no
   `exec`/`eval`/`compile` (enforced by `tests/scanner/test_detect.py`).
-- Tests: 412 (`tests/cli`, `tests/unit`, `tests/scanner`, `tests/security`; fixtures in
+- Tests: 544 (`tests/cli`, `tests/unit`, `tests/scanner`, `tests/security`, `tests/mock`; fixtures in
   `tests/fixtures/parse`, `tests/fixtures/rules` and the 13 apps in `tests/fixtures/apps`,
   expectations in `tests/fixtures/expected_findings.json`);
   `FLIGHTCHECK_NO_NETWORK=1` is set for every test. One `slow` test (200 files indexed < 3 s).
-- Placeholder types to tighten later (ADR-023 item 7): `ScenarioResult.exchanges` (Phase 5A),
-  `Report.capability_profile` and `ProviderConfig.declared_capabilities` (Phase 6),
-  `Report.ai_suggestions` (Phase 8).
+- Placeholder types to tighten later (ADR-023 item 7): `Report.capability_profile` and
+  `ProviderConfig.declared_capabilities` (Phase 6), `Report.ai_suggestions` (Phase 8).
+  `ScenarioResult.exchanges` is now `list[RecordedExchange]` (Phase 5A).
 - CI: `.github/workflows/ci.yml` (ruff check, ruff format --check, pytest, then
   `python scripts/eval_fixtures.py --check` on 3.11/3.12/3.13).
-  Phases 0–3 are pushed and CI is green on GitHub (Python 3.11/3.12/3.13); Phase 4 is committed
+  Phases 0–4 are pushed and CI is green on GitHub (Python 3.11/3.12/3.13); Phase 5A is committed
   locally and not yet pushed.
 - Known broken: nothing.
 - BharatCode key available: no (never paste the key).
@@ -55,8 +57,8 @@ The commit column names the phase commit by its message; find its hash with
 
 ## Next phase
 
-- Phase 5A: Mock provider: payloads, faults, recorder, non-streaming endpoints. Prompt in plan
-  §28 ("Prompt — Phase 5A"). P1 rules (FC-BC-009, FC-GEN-008/009, FC-SEC-003) remain open.
+- Phase 5B: Mock provider: streaming, server thread, OpenAI-SDK compatibility. Prompt in plan
+  §28 ("Prompt — Phase 5B"); start from docs/handoffs/PHASE_05A.md. P1 rules (FC-BC-009, FC-GEN-008/009, FC-SEC-003) remain open.
 
 ## Dropped / deferred (per plan §7.3)
 

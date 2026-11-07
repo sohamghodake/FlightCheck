@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
+from flightcheck.core.config import BHARATCODE_DOCUMENTED_MODELS
 from flightcheck.core.models import Confidence, Diagnostic, Location, ProviderDetection
 from flightcheck.scanner.parser import SDK_CONSTRUCTORS, CallSite, ClientBinding, RepoIndex
 
@@ -21,8 +22,7 @@ Provider = Literal["bharatcode", "openai", "openai_compatible_unknown", "openai_
 
 BHARATCODE_HOST = "bharatcode.ai"
 BHARATCODE_ENV_MARKER = "BHARATCODE"
-# Documented model IDs: docs/BHARATCODE_CONTRACT.md §15.1 ("Models"), read 2026-11-06.
-BHARATCODE_DOCUMENTED_MODELS = frozenset({"qwen-3.8-27b", "deepseek-v4.1-flash"})
+# BHARATCODE_DOCUMENTED_MODELS (core.config) is re-exported here for existing callers.
 
 _CONFIDENCE_RANK = {Confidence.LOW: 0, Confidence.MEDIUM: 1, Confidence.HIGH: 2}
 _PROVIDER_ORDER: tuple[Provider, ...] = (

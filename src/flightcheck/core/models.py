@@ -3,9 +3,8 @@
 Statuses are never collapsed: findings carry a kind and a verification level; checks carry one
 of six statuses; AI output lives in its own list and is never counted with findings or checks.
 
-Three fields are deliberately loose until the phase that owns their model exists:
+Two fields are deliberately loose until the phase that owns their model exists:
 
-- ``ScenarioResult.exchanges``    -> ``RecordedExchange`` (Phase 5A, mock recorder)
 - ``Report.capability_profile``   -> ``CapabilityProfile`` (Phase 6, providers)
 - ``Report.ai_suggestions``       -> ``AISuggestion`` / ``AIExplanation`` (Phase 8, diagnostics)
 """
@@ -177,6 +176,36 @@ class CheckResult(_Model):
         return self
 
 
+class Endpoint(StrEnum):
+    """API endpoint a request targeted (values match the scanner's call-site endpoints)."""
+
+    RESPONSES = "responses"
+    CHAT_COMPLETIONS = "chat.completions"
+    MODELS = "models"
+
+
+class RecordedExchange(_Model):
+    """One request seen by the mock and how it was answered (plan §17.3).
+
+    Written by ``mock.recorder.TrafficRecorder``; every string in it is already redacted.
+    ``request_headers["authorization"]`` is ``"[FAKE KEY]"`` when it carried the configured fake
+    key, ``"[REDACTED]"`` for any other value, and absent when the request sent none.
+    """
+
+    seq: int = Field(ge=1)
+    at_ms: int = Field(ge=0)  # monotonic ms since the recorder started
+    method: str
+    path: str  # e.g. "/api/model/v1/responses"
+    endpoint: Endpoint | None
+    request_headers: dict[str, str]
+    request_json: dict[str, Any] | None  # redacted; None when the body was not a JSON object
+    request_sha256: str  # canonical JSON hash (sorted keys) for retry detection
+    stream: bool
+    step_id: str  # which scripted step served it (or the mock's own guard, e.g. "auth")
+    response_status: int
+    response_summary: dict[str, Any] = Field(default_factory=dict)
+
+
 class AppRun(_Model):
     command: list[str]  # redacted
     exit_code: int | None
@@ -191,8 +220,7 @@ class ScenarioResult(_Model):
     name: str
     status: CheckStatus  # worst_status(check.status for check in checks)
     app_run: AppRun | None
-    # Placeholder until Phase 5A defines RecordedExchange; Phase 5A must tighten this type.
-    exchanges: list[dict[str, Any]] = Field(default_factory=list)
+    exchanges: list[RecordedExchange] = Field(default_factory=list)
     checks: list[CheckResult] = Field(default_factory=list)
 
 

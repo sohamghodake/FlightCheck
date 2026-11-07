@@ -4,11 +4,13 @@ This is the living description of how FlightCheck is structured. Together with
 [DECISIONS.md](DECISIONS.md) it is the source of truth: if the two disagree, the newer ADR wins and
 this file is corrected in the same commit.
 
-**Current state (Phase 3):** `src/flightcheck/__init__.py`, `__main__.py`, `cli/app.py` (with
+**Current state (Phase 5A):** `src/flightcheck/__init__.py`, `__main__.py`, `cli/app.py` (with
 `--version`), the `core` package (`models`, `config`, `errors`, `logging`, `redact`, `paths`) and
 the scanner (`scanner/discovery`, `ast_utils`, `parser`, `detect`, `engine`,
-`rules/bharatcode`), `orchestrator.run_scan`, `reporting/{json_report,terminal}` and the `scan`
-command exist. Conventions settled while building `core` are in ADR-023; scanner resolution and detection
+`rules/{bharatcode,robustness,security}`), `orchestrator.run_scan`,
+`reporting/{json_report,terminal}` and the `scan` command exist, plus the non-streaming mock
+(`mock/{faults,payloads,recorder,app}`; `mock/server.py` and streaming arrive in Phase 5B).
+Contract facts shared by the scanner and the mock live in `core.config` (ADR-027). Conventions settled while building `core` are in ADR-023; scanner resolution and detection
 rules are in ADR-011 and ADR-024. Everything else below is the target design. Modules are created
 in the phase that first gives them real code; there are no placeholder modules.
 

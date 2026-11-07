@@ -53,6 +53,15 @@ BHARATCODE_API_KEY_ENV = "BHARATCODE_API_KEY"
 BHARATCODE_DEFAULT_MODEL = "qwen-3.8-27b"
 MAX_OUTPUT_TOKENS_CAP = 32_000
 
+# Documented contract facts shared by the scanner rules and the mock (BHARATCODE_CONTRACT.md
+# §15.1). They live in core so that neither package has to import the other.
+BHARATCODE_DOCUMENTED_MODELS = frozenset({"qwen-3.8-27b", "deepseek-v4.1-flash"})
+BHARATCODE_PRO_ONLY_MODEL = "deepseek-v4.1-flash"
+# Audio/video/file input is documented as unsupported on /responses; the exact rejected
+# type names are [UNVERIFIED] (OpenAI's names are used).
+UNSUPPORTED_INPUT_TYPES = frozenset({"input_audio", "input_file"})
+FILE_INPUT_KEYS = ("file_id", "file_data")
+
 MIB = 1024 * 1024
 
 # Keys whose names look like they hold a secret. Keys ending in "_env" name an environment

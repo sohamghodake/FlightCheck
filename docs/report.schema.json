@@ -203,6 +203,16 @@
       "title": "Diagnostic",
       "type": "object"
     },
+    "Endpoint": {
+      "description": "API endpoint a request targeted (values match the scanner's call-site endpoints).",
+      "enum": [
+        "responses",
+        "chat.completions",
+        "models"
+      ],
+      "title": "Endpoint",
+      "type": "string"
+    },
     "Evidence": {
       "additionalProperties": false,
       "properties": {
@@ -446,6 +456,95 @@
       "title": "ProviderDetection",
       "type": "object"
     },
+    "RecordedExchange": {
+      "additionalProperties": false,
+      "description": "One request seen by the mock and how it was answered (plan §17.3).\n\nWritten by ``mock.recorder.TrafficRecorder``; every string in it is already redacted.\n``request_headers[\"authorization\"]`` is ``\"[FAKE KEY]\"`` when it carried the configured fake\nkey, ``\"[REDACTED]\"`` for any other value, and absent when the request sent none.",
+      "properties": {
+        "seq": {
+          "minimum": 1,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "at_ms": {
+          "minimum": 0,
+          "title": "At Ms",
+          "type": "integer"
+        },
+        "method": {
+          "title": "Method",
+          "type": "string"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "endpoint": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Endpoint"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "request_headers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Request Headers",
+          "type": "object"
+        },
+        "request_json": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Request Json"
+        },
+        "request_sha256": {
+          "title": "Request Sha256",
+          "type": "string"
+        },
+        "stream": {
+          "title": "Stream",
+          "type": "boolean"
+        },
+        "step_id": {
+          "title": "Step Id",
+          "type": "string"
+        },
+        "response_status": {
+          "title": "Response Status",
+          "type": "integer"
+        },
+        "response_summary": {
+          "additionalProperties": true,
+          "title": "Response Summary",
+          "type": "object"
+        }
+      },
+      "required": [
+        "seq",
+        "at_ms",
+        "method",
+        "path",
+        "endpoint",
+        "request_headers",
+        "request_json",
+        "request_sha256",
+        "stream",
+        "step_id",
+        "response_status"
+      ],
+      "title": "RecordedExchange",
+      "type": "object"
+    },
     "RepoMetadata": {
       "additionalProperties": false,
       "properties": {
@@ -568,8 +667,7 @@
         },
         "exchanges": {
           "items": {
-            "additionalProperties": true,
-            "type": "object"
+            "$ref": "#/$defs/RecordedExchange"
           },
           "title": "Exchanges",
           "type": "array"
