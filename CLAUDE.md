@@ -37,6 +37,8 @@ their backup.
 - Do not rewrite working code to suit a new idea. Minimal out-of-scope fixes need a test and a
   note in the handoff.
 - No new dependencies without an ADR.
+- Commits are authored by the developer only: never add Co-Authored-By or any AI attribution.
+- Read the plan only by section line ranges (grep headings first); never read it whole.
 
 ## Commands
 

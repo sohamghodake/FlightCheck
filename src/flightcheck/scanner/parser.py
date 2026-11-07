@@ -103,6 +103,10 @@ class CallSite:
     try_handlers: list[str]  # exception names of enclosing handlers, innermost first
     decorators: list[str]  # decorators of the enclosing function
     is_async_function: bool
+    # Parameters whose value is a bare name bound one hop (ADR-011) to a list/dict/tuple
+    # literal, e.g. ``tools=TOOLS`` with ``TOOLS = [...]``: parameter -> that literal's value.
+    # ``kwargs``/``params`` still hold ``Unknown`` for these names.
+    one_hop: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -235,6 +239,10 @@ class _Scope:
     attrs: dict[str, list[ClientBinding]] = field(default_factory=dict)  # class scope only
     str_consts: dict[str, str] = field(default_factory=dict)
     env_names: dict[str, str] = field(default_factory=dict)  # name -> env var it was read from
+    containers: dict[str, Any] = field(default_factory=dict)  # name -> list/dict/tuple literal
+    # Every name bound in this scope so far (any value, parameters, loop targets): a binding
+    # here shadows outer scopes even when its value is not a constant FlightCheck can use.
+    bound: set[str] = field(default_factory=set)
     self_name: str | None = None  # first parameter of a method
     facts: FunctionFacts | None = None
     try_stack: list[list[str]] = field(default_factory=list)
@@ -315,12 +323,43 @@ class _IndexVisitor(ast.NodeVisitor):
         name = self.qualify(target)
         return name if name is not None else source_segment(self.source, node, 120)
 
-    def _resolve_str(self, name: str) -> str | None:
+    def _lookup(self, name: str, table: str) -> Any:
+        """One-hop value of ``name`` from the nearest scope that binds it, else ``None``.
+
+        ``table`` is ``"str_consts"``, ``"containers"`` or ``"env_names"``. The nearest binding
+        wins even when its value is unusable (``x = make()``, a parameter), so an outer
+        constant is never seen through a local rebinding.
+        """
         for scope in reversed(self.scopes):
             if scope.kind == "class" and scope is not self.scope:
                 continue
-            if name in scope.str_consts:
-                return scope.str_consts[name]
+            values = getattr(scope, table)
+            if name in values:
+                return values[name]
+            if name in scope.bound:
+                return None
+        return None
+
+    def _resolve_str(self, name: str) -> str | None:
+        return self._lookup(name, "str_consts")
+
+    def _resolve_container(self, name: str) -> Any:
+        """One-hop list/dict/tuple literal bound to ``name`` (same lookup as strings), or None."""
+        return self._lookup(name, "containers")
+
+    def _shadow(self, target: ast.AST) -> None:
+        """Record every name stored by ``target`` as bound to an unknown value."""
+        scope = self.scope
+        for node in ast.walk(target):
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+                scope.bound.add(node.id)
+                scope.str_consts.pop(node.id, None)
+                scope.containers.pop(node.id, None)
+                scope.env_names.pop(node.id, None)
+
+    def _one_hop(self, name_node: ast.AST) -> Any:
+        if isinstance(name_node, ast.Name):
+            return self._resolve_container(name_node.id)
         return None
 
     def _env_name_of(self, node: ast.AST) -> str | None:
@@ -335,11 +374,7 @@ class _IndexVisitor(ast.NodeVisitor):
         if read is not None:
             return read[0]
         if isinstance(node, ast.Name):
-            for scope in reversed(self.scopes):
-                if scope.kind == "class" and scope is not self.scope:
-                    continue
-                if node.id in scope.env_names:
-                    return scope.env_names[node.id]
+            return self._lookup(node.id, "env_names")
         return None
 
     def _env_read(self, node: ast.AST) -> tuple[str, str, bool] | None:
@@ -426,6 +461,12 @@ class _IndexVisitor(ast.NodeVisitor):
         self.index.functions[qual] = facts
         scope = _Scope(kind="function", name=node.name, qualname=qual, facts=facts)
         scope.self_name = self_name
+        args = node.args
+        scope.bound.update(
+            a.arg
+            for a in [*args.posonlyargs, *args.args, *args.kwonlyargs, args.vararg, args.kwarg]
+            if a is not None
+        )
         self.scopes.append(scope)
         for stmt in node.body:
             self.visit(stmt)
@@ -498,13 +539,37 @@ class _IndexVisitor(ast.NodeVisitor):
             self.visit(node.optional_vars)
             self._bind(node.optional_vars, node.context_expr)
 
+    def visit_AugAssign(self, node: ast.AugAssign) -> None:
+        self.generic_visit(node)
+        self._shadow(node.target)
+
+    def _visit_for(self, node: ast.For | ast.AsyncFor) -> None:
+        self.visit(node.iter)
+        self._shadow(node.target)
+        self.visit(node.target)
+        for stmt in [*node.body, *node.orelse]:
+            self.visit(stmt)
+
+    visit_For = _visit_for
+    visit_AsyncFor = _visit_for
+
     def _bind(self, target: ast.AST, value: ast.AST) -> None:
         scope = self.scope
+        if not isinstance(target, ast.Name):
+            self._shadow(target)
         if isinstance(target, ast.Name):
+            scope.bound.add(target.id)
             if isinstance(value, ast.Constant) and isinstance(value.value, str):
                 scope.str_consts[target.id] = value.value
             else:
                 scope.str_consts.pop(target.id, None)
+            container = None
+            if isinstance(value, ast.List | ast.Dict | ast.Tuple):
+                container = literal_value(value, self.source)
+            if container is not None and not isinstance(container, Unknown):
+                scope.containers[target.id] = container
+            else:
+                scope.containers.pop(target.id, None)
             env = self._env_name_of(value)
             if env:
                 scope.env_names[target.id] = env
@@ -646,13 +711,22 @@ class _IndexVisitor(ast.NodeVisitor):
             receiver_node = ast.Attribute(value=receiver_node, attr=attr, ctx=ast.Load())
         kwargs, star = self._kwargs(node)
         params = kwargs
+        one_hop: dict[str, Any] = {}
+        for kw in node.keywords:
+            resolved = self._one_hop(kw.value) if kw.arg is not None else None
+            if resolved is not None:
+                one_hop[kw.arg] = resolved
         if kind == "http.post":
             params = {}
+            one_hop = {}
             json_node = next((kw.value for kw in node.keywords if kw.arg == "json"), None)
             if isinstance(json_node, ast.Dict):
                 for key, value in zip(json_node.keys, json_node.values, strict=True):
                     if isinstance(key, ast.Constant) and isinstance(key.value, str):
                         params[key.value] = literal_value(value, self.source)
+                        resolved = self._one_hop(value)
+                        if resolved is not None:
+                            one_hop[key.value] = resolved
                     elif key is None:
                         star = True
             elif json_node is not None:
@@ -695,6 +769,7 @@ class _IndexVisitor(ast.NodeVisitor):
             try_handlers=list(dict.fromkeys(handlers)),
             decorators=list(fn.facts.decorators) if fn and fn.facts else [],
             is_async_function=bool(fn and fn.facts and fn.facts.is_async),
+            one_hop=one_hop,
         )
         self.index.call_sites.append(call)
         self.pending.append(

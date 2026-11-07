@@ -1,0 +1,759 @@
+{
+  "$defs": {
+    "AppRun": {
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Command",
+          "type": "array"
+        },
+        "exit_code": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Exit Code"
+        },
+        "timed_out": {
+          "title": "Timed Out",
+          "type": "boolean"
+        },
+        "duration_ms": {
+          "title": "Duration Ms",
+          "type": "integer"
+        },
+        "stdout_excerpt": {
+          "title": "Stdout Excerpt",
+          "type": "string"
+        },
+        "stderr_excerpt": {
+          "title": "Stderr Excerpt",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command",
+        "exit_code",
+        "timed_out",
+        "duration_ms",
+        "stdout_excerpt",
+        "stderr_excerpt"
+      ],
+      "title": "AppRun",
+      "type": "object"
+    },
+    "CheckResult": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "check_id": {
+          "title": "Check Id",
+          "type": "string"
+        },
+        "scenario_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Scenario Id"
+        },
+        "status": {
+          "$ref": "#/$defs/CheckStatus"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "verification": {
+          "$ref": "#/$defs/Verification"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        },
+        "expected": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected"
+        },
+        "observed": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Observed"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          },
+          "title": "Evidence",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "check_id",
+        "scenario_id",
+        "status",
+        "severity",
+        "verification",
+        "message"
+      ],
+      "title": "CheckResult",
+      "type": "object"
+    },
+    "CheckStatus": {
+      "enum": [
+        "passed",
+        "failed",
+        "skipped",
+        "unsupported",
+        "needs_review",
+        "error"
+      ],
+      "title": "CheckStatus",
+      "type": "string"
+    },
+    "Confidence": {
+      "enum": [
+        "high",
+        "medium",
+        "low"
+      ],
+      "title": "Confidence",
+      "type": "string"
+    },
+    "Diagnostic": {
+      "additionalProperties": false,
+      "description": "Tool-level issue (parse error, file too large, limit reached).",
+      "properties": {
+        "level": {
+          "enum": [
+            "info",
+            "warning",
+            "error"
+          ],
+          "title": "Level",
+          "type": "string"
+        },
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path"
+        }
+      },
+      "required": [
+        "level",
+        "code",
+        "message"
+      ],
+      "title": "Diagnostic",
+      "type": "object"
+    },
+    "Evidence": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "enum": [
+            "source",
+            "traffic",
+            "process",
+            "documentation",
+            "probe"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "location": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Location"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "exchange_seq": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exchange Seq"
+        },
+        "excerpt": {
+          "default": "",
+          "title": "Excerpt",
+          "type": "string"
+        },
+        "note": {
+          "default": "",
+          "title": "Note",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Evidence",
+      "type": "object"
+    },
+    "Finding": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "rule_id": {
+          "title": "Rule Id",
+          "type": "string"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/FindingKind"
+        },
+        "verification": {
+          "$ref": "#/$defs/Verification"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "confidence": {
+          "$ref": "#/$defs/Confidence"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "location": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Location"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "remediation": {
+          "title": "Remediation",
+          "type": "string"
+        },
+        "doc_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Doc Url"
+        },
+        "provider": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider"
+        },
+        "check_ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Check Ref"
+        }
+      },
+      "required": [
+        "id",
+        "rule_id",
+        "title",
+        "kind",
+        "verification",
+        "severity",
+        "confidence",
+        "message",
+        "location",
+        "evidence",
+        "remediation"
+      ],
+      "title": "Finding",
+      "type": "object"
+    },
+    "FindingKind": {
+      "enum": [
+        "static",
+        "runtime",
+        "hypothesis"
+      ],
+      "title": "FindingKind",
+      "type": "string"
+    },
+    "Location": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "line": {
+          "minimum": 0,
+          "title": "Line",
+          "type": "integer"
+        },
+        "column": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Column",
+          "type": "integer"
+        },
+        "end_line": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "End Line"
+        }
+      },
+      "required": [
+        "path",
+        "line"
+      ],
+      "title": "Location",
+      "type": "object"
+    },
+    "ProviderDetection": {
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "enum": [
+            "bharatcode",
+            "openai",
+            "openai_compatible_unknown",
+            "openai_or_env",
+            "unknown"
+          ],
+          "title": "Provider",
+          "type": "string"
+        },
+        "confidence": {
+          "$ref": "#/$defs/Confidence"
+        },
+        "location": {
+          "$ref": "#/$defs/Location"
+        },
+        "signals": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Signals",
+          "type": "array"
+        }
+      },
+      "required": [
+        "provider",
+        "confidence",
+        "location",
+        "signals"
+      ],
+      "title": "ProviderDetection",
+      "type": "object"
+    },
+    "RepoMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "root_name": {
+          "title": "Root Name",
+          "type": "string"
+        },
+        "python_files_scanned": {
+          "title": "Python Files Scanned",
+          "type": "integer"
+        },
+        "files_skipped": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Files Skipped",
+          "type": "object"
+        },
+        "total_bytes_scanned": {
+          "title": "Total Bytes Scanned",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "root_name",
+        "python_files_scanned",
+        "files_skipped",
+        "total_bytes_scanned"
+      ],
+      "title": "RepoMetadata",
+      "type": "object"
+    },
+    "ReportMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "tool_version": {
+          "title": "Tool Version",
+          "type": "string"
+        },
+        "generated_at": {
+          "format": "date-time",
+          "title": "Generated At",
+          "type": "string"
+        },
+        "command": {
+          "enum": [
+            "scan",
+            "test",
+            "explain",
+            "ci",
+            "probe"
+          ],
+          "title": "Command",
+          "type": "string"
+        },
+        "options": {
+          "additionalProperties": true,
+          "title": "Options",
+          "type": "object"
+        },
+        "python_version": {
+          "title": "Python Version",
+          "type": "string"
+        },
+        "platform": {
+          "title": "Platform",
+          "type": "string"
+        },
+        "mock_fidelity": {
+          "enum": [
+            "documentation_model",
+            "compared_with_live",
+            "n/a"
+          ],
+          "title": "Mock Fidelity",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tool_version",
+        "generated_at",
+        "command",
+        "options",
+        "python_version",
+        "platform",
+        "mock_fidelity"
+      ],
+      "title": "ReportMetadata",
+      "type": "object"
+    },
+    "ScenarioResult": {
+      "additionalProperties": false,
+      "properties": {
+        "scenario_id": {
+          "title": "Scenario Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/CheckStatus"
+        },
+        "app_run": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AppRun"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "exchanges": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Exchanges",
+          "type": "array"
+        },
+        "checks": {
+          "items": {
+            "$ref": "#/$defs/CheckResult"
+          },
+          "title": "Checks",
+          "type": "array"
+        }
+      },
+      "required": [
+        "scenario_id",
+        "name",
+        "status",
+        "app_run"
+      ],
+      "title": "ScenarioResult",
+      "type": "object"
+    },
+    "Severity": {
+      "enum": [
+        "critical",
+        "high",
+        "medium",
+        "low",
+        "info"
+      ],
+      "title": "Severity",
+      "type": "string"
+    },
+    "Summary": {
+      "additionalProperties": false,
+      "properties": {
+        "findings_by_severity": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/Severity"
+          },
+          "title": "Findings By Severity",
+          "type": "object"
+        },
+        "findings_by_kind": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/FindingKind"
+          },
+          "title": "Findings By Kind",
+          "type": "object"
+        },
+        "checks_by_status": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/CheckStatus"
+          },
+          "title": "Checks By Status",
+          "type": "object"
+        },
+        "checks_by_verification": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/Verification"
+          },
+          "title": "Checks By Verification",
+          "type": "object"
+        },
+        "ai_suggestions": {
+          "title": "Ai Suggestions",
+          "type": "integer"
+        },
+        "highest_severity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Severity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "findings_by_severity",
+        "findings_by_kind",
+        "checks_by_status",
+        "checks_by_verification",
+        "ai_suggestions",
+        "highest_severity"
+      ],
+      "title": "Summary",
+      "type": "object"
+    },
+    "Verification": {
+      "enum": [
+        "static",
+        "runtime_mock",
+        "runtime_live"
+      ],
+      "title": "Verification",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "metadata": {
+      "$ref": "#/$defs/ReportMetadata"
+    },
+    "repo": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RepoMetadata"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "providers_detected": {
+      "items": {
+        "$ref": "#/$defs/ProviderDetection"
+      },
+      "title": "Providers Detected",
+      "type": "array"
+    },
+    "capability_profile": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Capability Profile"
+    },
+    "findings": {
+      "items": {
+        "$ref": "#/$defs/Finding"
+      },
+      "title": "Findings",
+      "type": "array"
+    },
+    "scenarios": {
+      "items": {
+        "$ref": "#/$defs/ScenarioResult"
+      },
+      "title": "Scenarios",
+      "type": "array"
+    },
+    "diagnostics": {
+      "items": {
+        "$ref": "#/$defs/Diagnostic"
+      },
+      "title": "Diagnostics",
+      "type": "array"
+    },
+    "ai_suggestions": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Ai Suggestions",
+      "type": "array"
+    },
+    "summary": {
+      "$ref": "#/$defs/Summary"
+    }
+  },
+  "required": [
+    "metadata",
+    "repo",
+    "summary"
+  ],
+  "title": "Report",
+  "type": "object"
+}

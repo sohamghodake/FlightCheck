@@ -17,6 +17,7 @@ from collections import Counter
 from collections.abc import Iterable
 from datetime import datetime
 from enum import StrEnum
+from pathlib import Path
 from typing import Any, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -291,3 +292,15 @@ class Report(_Model):
     # Placeholder until Phase 8 defines AISuggestion; Phase 8 must tighten this type.
     ai_suggestions: list[dict[str, Any]] = Field(default_factory=list)
     summary: Summary
+
+
+# --- Requests (§21.4) -----------------------------------------------------------------------
+
+
+class ScanRequest(_Model):
+    """Input to ``orchestrator.run_scan``. Not part of the report schema."""
+
+    root: Path
+    provider_override: str | None = None  # "bharatcode" | "openai_compatible" | None (auto)
+    rule_ids: list[str] | None = None
+    min_severity: Severity = Severity.INFO

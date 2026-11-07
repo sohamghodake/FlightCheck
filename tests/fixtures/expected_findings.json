@@ -1,0 +1,137 @@
+{
+  "_comment": "Exact expected findings per fixture file, relative to 'root'. Every .py file under root must be listed; an empty list means no findings. Used by tests/scanner/test_rules_fixtures.py.",
+  "root": "tests/fixtures/rules",
+  "files": {
+    "FC-BC-001/bad_raw_post.py": [
+      {
+        "rule_id": "FC-BC-001",
+        "line": 9,
+        "severity": "high",
+        "confidence": "high",
+        "kind": "static"
+      }
+    ],
+    "FC-BC-001/bad_store_true.py": [
+      {
+        "rule_id": "FC-BC-001",
+        "line": 14,
+        "severity": "high",
+        "confidence": "high",
+        "kind": "static"
+      }
+    ],
+    "FC-BC-001/good_other_provider.py": [],
+    "FC-BC-001/good_store_false.py": [],
+    "FC-BC-001/good_store_variable.py": [],
+    "FC-BC-002/bad_literal_id.py": [
+      {
+        "rule_id": "FC-BC-002",
+        "line": 14,
+        "severity": "high",
+        "confidence": "high",
+        "kind": "static"
+      }
+    ],
+    "FC-BC-002/bad_variable_id.py": [
+      {
+        "rule_id": "FC-BC-002",
+        "line": 14,
+        "severity": "high",
+        "confidence": "medium",
+        "kind": "static"
+      }
+    ],
+    "FC-BC-002/good_absent.py": [],
+    "FC-BC-002/good_none.py": [],
+    "FC-BC-003/bad_one_hop.py": [
+      {
+        "rule_id": "FC-BC-003",
+        "line": 17,
+        "severity": "high",
+        "confidence": "medium",
+        "kind": "static"
+      }
+    ],
+    "FC-BC-003/bad_web_search.py": [
+      {
+        "rule_id": "FC-BC-003",
+        "line": 14,
+        "severity": "high",
+        "confidence": "high",
+        "kind": "static"
+      }
+    ],
+    "FC-BC-003/good_dynamic_tools.py": [],
+    "FC-BC-003/good_function_tool.py": [],
+    "FC-BC-004/bad_background.py": [
+      {
+        "rule_id": "FC-BC-004",
+        "line": 14,
+        "severity": "high",
+        "confidence": "high",
+        "kind": "static"
+      }
+    ],
+    "FC-BC-004/good_background.py": [],
+    "FC-BC-005/bad_chat_64000.py": [
+      {
+        "rule_id": "FC-BC-005",
+        "line": 14,
+        "severity": "medium",
+        "confidence": "high",
+        "kind": "static"
+      }
+    ],
+    "FC-BC-005/bad_responses_64000.py": [
+      {
+        "rule_id": "FC-BC-005",
+        "line": 14,
+        "severity": "medium",
+        "confidence": "high",
+        "kind": "static"
+      }
+    ],
+    "FC-BC-005/good_budgets.py": [],
+    "FC-BC-006/bad_gpt4o.py": [
+      {
+        "rule_id": "FC-BC-006",
+        "line": 14,
+        "severity": "medium",
+        "confidence": "medium",
+        "kind": "static"
+      }
+    ],
+    "FC-BC-006/bad_pro_only_model.py": [
+      {
+        "rule_id": "FC-BC-006",
+        "line": 14,
+        "severity": "info",
+        "confidence": "high",
+        "kind": "static"
+      }
+    ],
+    "FC-BC-006/good_documented_model.py": [],
+    "FC-BC-006/good_env_model.py": [],
+    "FC-BC-007/bad_store_omitted.py": [
+      {
+        "rule_id": "FC-BC-007",
+        "line": 14,
+        "severity": "low",
+        "confidence": "medium",
+        "kind": "hypothesis"
+      }
+    ],
+    "FC-BC-007/good_star_kwargs.py": [],
+    "FC-BC-007/good_store_false.py": [],
+    "FC-BC-008/bad_input_file.py": [
+      {
+        "rule_id": "FC-BC-008",
+        "line": 14,
+        "severity": "high",
+        "confidence": "medium",
+        "kind": "static"
+      }
+    ],
+    "FC-BC-008/good_text_and_image.py": []
+  }
+}
