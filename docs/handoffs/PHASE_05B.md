@@ -18,7 +18,7 @@
   - `docs/ARCHITECTURE.md` §8: the payload fields the OpenAI SDK requires.
 - Tests added (files, count) and gate results: `tests/mock/test_streaming.py` (46),
   `test_server.py` (8, `slow`), `test_sdk_compat.py` (16, `slow`); `test_app_nonstream.py`
-  lost its two 501 tests (78 left). 612 total (+68). `ruff check .`, `ruff format --check .`,
+  lost its two 501 tests (78 left). 612 total (+68) at the 5B commit; 625 after the follow-up fixes. `ruff check .`, `ruff format --check .`,
   `pytest -m "not live" -q`, `python scripts/eval_fixtures.py --check` (107/107, 0, 0) green on
   Python 3.12.14; the mock suite also passes with unraisable-exception warnings as errors.
   Server/SDK tests ran 3× in a row without flakes.
@@ -50,16 +50,28 @@
     sends one (`response.failed` nests the error under `response`).
   - httpx2 rejects a whitespace-only `Authorization` header client-side, so the SDK cannot send
     a blank key at all.
-- Out-of-scope changes (file, reason, test): none outside `mock/` and `tests/mock/`.
+- Follow-up fixes after the 5B commit (same phase, separate commit):
+  - Slow streams: `interval_s` step parameter (pause between SSE chunks; ADR-015 item 8).
+    Tests: `test_streaming.py` interval tests (validation, exact sleeps, real elapsed time).
+  - 5A issue: a failure inside `TrafficRecorder.record` is now caught in `mock/app.py`; the
+    client still gets its answer and `x-request-id`; `TrafficRecorder.record_failures`,
+    `note_record_failure()` and `complete` added (ADR-015 item 9). Tests:
+    `test_recorder_failure_still_answers`, `test_recorder_failure_after_a_stream_keeps_the_stream`,
+    `test_record_failures_make_the_recording_incomplete`.
+  - 5A issue: `test_delay_really_waits` now times the delayed request itself (≥ 0.2 s) and
+    compares `at_ms` with an undelayed request.
+  - 5A issue: fastapi/uvicorn/httpx2 re-checked on PyPI; unchanged (ADR-008 re-check note).
+  - The new tests were mutation-checked: removing the interval sleep or the recorder guard
+    makes them fail.
+- Out-of-scope changes (file, reason, test): none outside `mock/`, `tests/mock/` and the ADR-008
+  re-check note.
 - Known issues / limitations:
   - All stream payload fields, the Chat stream format and the keepalive text are [UNVERIFIED]
     until the Phase 10 probe.
   - `RecordedExchange` order in `TrafficRecorder.list()` is append order; a stream is appended
     when it ends, so it can follow a later request. Sort by `seq` for arrival order.
-  - No delay between stream events (only `DELAY` before the first byte), so slow-stream/read
-    timeout scenarios need a new step parameter if Phase 7 wants them.
-  - From 5A, still open: a failure inside `TrafficRecorder.record` is not caught; the weak
-    `test_delay_really_waits` assertion; ADR-008 versions not re-checked on PyPI.
+  - Phase 7 should treat `TrafficRecorder.complete is False` as `needs_review` for traffic
+    checks (some requests are missing from the recording).
   - Tests that start the SDK set `NO_PROXY` and clear proxy variables; the Phase 7 harness must
     do the same for the app's child process.
 - Exact next step for the next phase: Phase 6 (provider adapters and capability registry). Use

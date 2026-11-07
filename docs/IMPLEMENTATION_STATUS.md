@@ -8,7 +8,7 @@
 | 3     | Rule engine, BharatCode contract rules, `scan`, JSON + terminal output    | done        | 2026-11-07 | `feat: scan command with BharatCode contract rules (phase 3)` | 305 tests; ADR-012, ADR-025; see PHASE_03.md |
 | 4     | Robustness and security rules, fixture suite, evaluation script           | done        | 2026-11-07 | `feat(rules): robustness and security rules, fixture suite, eval (phase 4)` | 412 tests; ADR-013, ADR-026; see PHASE_04.md |
 | 5A    | Mock provider: payloads, faults, recorder, non-streaming endpoints        | done        | 2026-11-07 | `feat(mock): contract-aware mock, non-streaming (phase 5A)` | 544 tests; ADR-014, ADR-027; see PHASE_05A.md |
-| 5B    | Mock provider: streaming, server thread, OpenAI-SDK compatibility         | done        | 2026-11-07 | `feat(mock): streaming, server runner, SDK compatibility (phase 5B)` | 612 tests; ADR-015; see PHASE_05B.md |
+| 5B    | Mock provider: streaming, server thread, OpenAI-SDK compatibility         | done        | 2026-11-07 | `feat(mock): streaming, server runner, SDK compatibility (phase 5B)` | 625 tests; ADR-015; see PHASE_05B.md |
 | 6     | Provider adapters and capability registry                                 | not started |            |                                                | Generic OpenAI-compatible adapter is P1                  |
 | 7A    | Runtime harness, validators, scenarios S01/S02/S04                        | not started |            |                                                |                                                          |
 | 7B    | Scenarios S03/S05/S06, `test` command, runtime expectations               | not started |            |                                                |                                                          |
@@ -41,7 +41,7 @@ The commit column names the phase commit by its message; find its hash with
   `python scripts/eval_fixtures.py` writes `docs/EVALUATION.md`; `--check` runs the §26.2 gates. The scanner
   imports no `subprocess`/`importlib`/`runpy`/`providers`/`runtime` and calls no
   `exec`/`eval`/`compile` (enforced by `tests/scanner/test_detect.py`).
-- Tests: 612 (`tests/cli`, `tests/unit`, `tests/scanner`, `tests/security`, `tests/mock`; fixtures in
+- Tests: 625 (`tests/cli`, `tests/unit`, `tests/scanner`, `tests/security`, `tests/mock`; fixtures in
   `tests/fixtures/parse`, `tests/fixtures/rules` and the 13 apps in `tests/fixtures/apps`,
   expectations in `tests/fixtures/expected_findings.json`);
   `FLIGHTCHECK_NO_NETWORK=1` is set for every test. 25 `slow` tests: the 200-file index test

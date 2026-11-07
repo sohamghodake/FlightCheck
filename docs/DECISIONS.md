@@ -141,6 +141,9 @@ Format:
   had marked Rich, Uvicorn, Jinja2 and ruff as unverified; they are now verified as above. No
   lock file is committed in Phase 0; the plan's `uv.lock` / `requirements-lock.txt` is deferred to a
   later phase.
+- Re-check (Phase 5A/5B, 2026-11-07, PyPI JSON API): fastapi 0.162.0 (2026-10-23), uvicorn 0.54.0
+  (2026-09-25) and httpx2 2.16.0 (2026-10-21) are still the latest releases, matching the
+  installed versions; bounds unchanged (plan §27 Phase 5A item 9).
 
 ## ADR-010 — Report schema 1.0 is frozen for the MVP; additive changes only
 
@@ -468,6 +471,14 @@ Format:
      message names the port), and on stop sets `should_exit`, joins ≤ 5 s, then `force_exit`.
      Uvicorn 0.54 skips signal handlers off the main thread (`Server.capture_signals`), so
      nothing is disabled.
+  8. **Slow streams** (added after the 5B commit, same phase): any action answering a stream
+     request takes `interval_s`, the pause between consecutive chunks (none before the first),
+     at most 60 s per gap and 600 s per stream, else a recorded 500. Recorded as
+     `response_summary["interval_s"]`. This models read timeouts and long queue waits with
+     keepalives; `DELAY` still delays the first byte.
+  9. **Recorder failures** never cost the client its answer: the app logs the exception type,
+     calls `TrafficRecorder.note_record_failure()` and still responds (with `x-request-id`).
+     `TrafficRecorder.complete` is `False` when anything was dropped or failed to record.
 - Consequences: The OpenAI SDK parses every stream, including its `responses.stream()`
   helper. When the Phase 10 probe records real BharatCode streams, golden transcripts replace
   these shapes wherever they differ, and this ADR is superseded.

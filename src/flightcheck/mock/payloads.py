@@ -433,6 +433,8 @@ CHAT_BUILDERS: dict[str, Builder] = {
 KEEPALIVE = b": keepalive\n\n"  # the exact comment text BharatCode sends is [UNVERIFIED]
 DONE = b"data: [DONE]\n\n"
 DEFAULT_FAIL_AFTER = 2
+MAX_INTERVAL_S = 60.0  # per gap between chunks
+MAX_STREAM_S = 600.0  # all gaps of one stream together
 _ARGUMENT_PIECE = 8
 
 
@@ -443,6 +445,7 @@ class SSEStream:
     headers: Headers
     chunks: list[bytes]
     outcome: dict[str, Any]
+    interval_s: float = 0.0  # pause between consecutive chunks (slow-stream scenarios)
 
 
 def sse_event(event: str, data: dict[str, Any]) -> bytes:
@@ -467,6 +470,30 @@ def argument_pieces(arguments: str) -> list[str]:
     return [
         arguments[i : i + _ARGUMENT_PIECE] for i in range(0, len(arguments), _ARGUMENT_PIECE)
     ] or [""]
+
+
+def stream_interval(step: MockStep, chunk_count: int) -> float:
+    """The ``interval_s`` step parameter: seconds between consecutive chunks (default 0).
+
+    Lets scripts model a slow stream (read timeouts, keepalives during a long queue wait).
+    """
+    value = step.params.get("interval_s", 0)
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ValueError("'interval_s' must be a number of seconds")
+    if not 0 <= value <= MAX_INTERVAL_S:
+        raise ValueError("'interval_s' must be between 0 and 60")
+    if value * max(chunk_count - 1, 0) > MAX_STREAM_S:
+        raise ValueError("'interval_s' would make the stream longer than 600 s")
+    return float(value)
+
+
+def _sse_stream(
+    step: MockStep, seq: int, chunks: list[bytes], outcome: dict[str, Any]
+) -> SSEStream:
+    interval = stream_interval(step, len(chunks))
+    if interval:
+        outcome["interval_s"] = interval
+    return SSEStream(stream_headers(seq), chunks, outcome, interval)
 
 
 def fail_after(step: MockStep) -> int:
@@ -607,7 +634,7 @@ def responses_stream(request_json: dict[str, Any], step: MockStep, seq: int) -> 
     if action is MockAction.KEEPALIVE_STREAM:
         chunks = _with_keepalives(chunks)
         outcome["keepalives"] = chunks.count(KEEPALIVE)
-    return SSEStream(stream_headers(seq), chunks, outcome)
+    return _sse_stream(step, seq, chunks, outcome)
 
 
 def _stream_message_partial(
@@ -714,4 +741,4 @@ def chat_stream(request_json: dict[str, Any], step: MockStep, seq: int) -> SSESt
     if action is MockAction.KEEPALIVE_STREAM:
         chunks = _with_keepalives(chunks)
         outcome["keepalives"] = chunks.count(KEEPALIVE)
-    return SSEStream(stream_headers(seq), chunks, outcome)
+    return _sse_stream(step, seq, chunks, outcome)

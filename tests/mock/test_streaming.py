@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from dataclasses import dataclass
 
 import pytest
@@ -555,3 +556,76 @@ def test_send_failure_mid_stream_is_recorded_once() -> None:
     (ex,) = recorder.list()
     assert ex.response_summary["finish"] == "client_disconnected"
     assert ex.response_summary["chunks_sent"] == 2
+
+
+# --- slow streams (interval_s) --------------------------------------------------------------
+
+
+def test_interval_defaults_to_zero_and_is_recorded_when_set() -> None:
+    plain = payloads.responses_stream(rreq(), s(MockAction.OK_TEXT), 1)
+    assert plain.interval_s == 0 and "interval_s" not in plain.outcome
+    slow = payloads.chat_stream(creq(), s(MockAction.KEEPALIVE_STREAM, interval_s=0.5), 1)
+    assert slow.interval_s == 0.5 and slow.outcome["interval_s"] == 0.5
+    assert slow.chunks == payloads.chat_stream(creq(), s(MockAction.KEEPALIVE_STREAM), 1).chunks
+
+
+@pytest.mark.parametrize("bad", [-0.1, 61, "1", True, None])
+def test_interval_rejects_bad_values(bad: object) -> None:
+    with pytest.raises(ValueError):
+        payloads.responses_stream(rreq(), s(MockAction.OK_TEXT, interval_s=bad), 1)
+
+
+def test_interval_total_is_capped() -> None:
+    long_text = " ".join("w" for _ in range(200))
+    with pytest.raises(ValueError, match="600 s"):
+        payloads.chat_stream(creq(), s(MockAction.OK_TEXT, text=long_text, interval_s=10), 1)
+
+
+def test_app_sleeps_between_chunks_only(make, monkeypatch: pytest.MonkeyPatch) -> None:  # type: ignore[no-untyped-def]
+    real_sleep = asyncio.sleep
+    slept: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        if seconds:
+            slept.append(seconds)
+        await real_sleep(0)
+
+    monkeypatch.setattr("flightcheck.mock.app.asyncio.sleep", fake_sleep)
+    client, rec = make(s(MockAction.OK_TEXT, interval_s=1.5))
+    resp = client.post(f"{BASE}/responses", json=rreq(), headers=AUTH)
+    assert responses_events(resp.content)[-1].type == "response.completed"
+    summary = rec.list()[0].response_summary
+    assert slept == [1.5] * (summary["chunks_planned"] - 1)  # no pause before the first chunk
+    assert summary["interval_s"] == 1.5 and summary["finish"] == "completed"
+
+
+def test_app_slow_stream_really_waits(make) -> None:  # type: ignore[no-untyped-def]
+    client, rec = make(s(MockAction.STREAM_FAIL_AFTER, n=1, interval_s=0.03))
+    started = time.monotonic()
+    resp = client.post(f"{BASE}/chat/completions", json=creq(), headers=AUTH)
+    elapsed = time.monotonic() - started
+    chunks, done = chat_chunks(resp.content)
+    assert not done and len(chunks) == 2  # role chunk + 1 content chunk
+    assert elapsed >= 0.03
+
+
+def test_bad_interval_is_a_recorded_500(make) -> None:  # type: ignore[no-untyped-def]
+    client, rec = make(s(MockAction.TOOL_CALL, interval_s=-1))
+    resp = client.post(f"{BASE}/responses", json=rreq(tools=[RESPONSES_TOOL]), headers=AUTH)
+    assert resp.status_code == 500 and resp.json()["error"]["code"] == "flightcheck_mock_error"
+    assert rec.list()[0].response_summary["error"] == "ValueError"
+
+
+def test_recorder_failure_after_a_stream_keeps_the_stream(
+    make, monkeypatch: pytest.MonkeyPatch
+) -> None:  # type: ignore[no-untyped-def]
+    client, rec = make()
+
+    def broken(**kwargs: object) -> None:
+        raise RuntimeError("recorder down")
+
+    monkeypatch.setattr(rec, "record", broken)
+    resp = client.post(f"{BASE}/responses", json=rreq(), headers=AUTH)
+    assert resp.headers["x-request-id"] == "fc_mock_1"
+    assert responses_events(resp.content)[-1].type == "response.completed"
+    assert rec.record_failures == 1 and not rec.complete

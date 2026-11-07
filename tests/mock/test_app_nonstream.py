@@ -5,6 +5,7 @@ httpx2.Client running the ASGI app in-process; no sockets).
 """
 
 import json
+import time
 from collections.abc import Callable
 
 import openai
@@ -260,10 +261,30 @@ def test_delay_action(make: Make, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_delay_really_waits(make: Make) -> None:
-    client, rec = make(s(MockAction.DELAY, seconds=0.05))
+    client, rec = make(s(MockAction.OK_TEXT), s(MockAction.DELAY, seconds=0.2))
+    client.post(f"{BASE}/responses", json=responses_req(), headers=AUTH)
+    started = time.monotonic()
     resp = client.post(f"{BASE}/responses", json=responses_req(), headers=AUTH)
+    elapsed = time.monotonic() - started
     assert resp.status_code == 200
-    assert rec.list()[0].at_ms >= 50
+    assert elapsed >= 0.2  # the request itself took at least the scripted delay
+    first, second = rec.list()
+    assert second.at_ms - first.at_ms >= 200
+    assert second.response_summary["delay_s"] == 0.2
+
+
+def test_recorder_failure_still_answers(make: Make, monkeypatch: pytest.MonkeyPatch) -> None:
+    client, rec = make()
+
+    def broken(**kwargs: object) -> None:
+        raise RuntimeError(f"disk full {LIVE_KEY}")
+
+    monkeypatch.setattr(rec, "record", broken)
+    ok = client.post(f"{BASE}/responses", json=responses_req(), headers=AUTH)
+    err = client.post(f"{BASE}/responses", json=responses_req(store=True), headers=AUTH)
+    assert (ok.status_code, err.status_code) == (200, 400)
+    assert ok.headers["x-request-id"] == "fc_mock_1" and err.headers["x-request-id"] == "fc_mock_2"
+    assert rec.record_failures == 2 and rec.complete is False and rec.list() == []
 
 
 @pytest.mark.parametrize("seconds", [-1, 601, "2", True])

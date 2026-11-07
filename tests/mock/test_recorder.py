@@ -126,9 +126,19 @@ def test_planted_live_key_never_recorded() -> None:
 
 def test_max_records_counts_dropped() -> None:
     rec = TrafficRecorder(max_records=2)
+    assert rec.complete is True
     for _ in range(5):
         record(rec)
     assert len(rec) == 2 and rec.dropped == 3
+    assert rec.complete is False
+
+
+def test_record_failures_make_the_recording_incomplete() -> None:
+    rec = TrafficRecorder()
+    record(rec)
+    assert rec.complete is True and rec.record_failures == 0
+    rec.note_record_failure()
+    assert rec.record_failures == 1 and rec.complete is False
 
 
 def test_concurrent_seq_and_append() -> None:

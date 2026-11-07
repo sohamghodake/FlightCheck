@@ -25,7 +25,9 @@ class MockStep(BaseModel):
 
     Common ``params``: ``scenario`` (ID used in markers and call IDs, default ``"mock"``),
     ``text`` (answer text). ``HTTP_ERROR``: ``status`` (default 503), ``message``, ``code``,
-    ``retry_after``. ``DELAY``: ``seconds`` (default 1.0).
+    ``retry_after``. ``DELAY``: ``seconds`` (default 1.0). ``STREAM_FAIL_AFTER``: ``n``
+    (default 2). Any action answering a stream request: ``interval_s`` (seconds between SSE
+    chunks, default 0, at most 60 per gap and 600 in total).
     """
 
     model_config = ConfigDict(extra="forbid")

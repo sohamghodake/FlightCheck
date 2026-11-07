@@ -256,6 +256,15 @@ class _MockService:
         return JSONResponse(redact_obj(answer.body), status_code=answer.status, headers=headers)
 
     def _record(self, request: Request, ex: _Exchange, status: int) -> None:
+        """Record the exchange. A recorder failure must never cost the client its answer (or
+        its ``x-request-id``), so it is logged (type only) and counted instead."""
+        try:
+            self._record_unchecked(request, ex, status)
+        except Exception as exc:  # noqa: BLE001
+            self.recorder.note_record_failure()
+            _log.warning("mock could not record request %d: %s", ex.seq, type(exc).__name__)
+
+    def _record_unchecked(self, request: Request, ex: _Exchange, status: int) -> None:
         self.recorder.record(
             seq=ex.seq,
             method=request.method,
@@ -278,7 +287,9 @@ class _MockService:
         state = {"sent": 0, "recorded": False}
 
         async def body() -> Any:
-            for chunk in chunks:
+            for index, chunk in enumerate(chunks):
+                if index and stream.interval_s:
+                    await asyncio.sleep(stream.interval_s)  # scripted slow stream
                 yield chunk
                 state["sent"] += 1  # resumed only after the chunk was handed to the server
                 await asyncio.sleep(0)  # let clients see incremental delivery

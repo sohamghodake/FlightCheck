@@ -72,6 +72,8 @@ class TrafficRecorder:
     Sequence numbers are handed out by :meth:`next_seq` when a request arrives, so they follow
     arrival order even if exchanges are appended later. After ``max_records`` exchanges, new
     ones are counted in :attr:`dropped` instead of stored (a runaway app cannot exhaust memory).
+    :attr:`record_failures` counts exchanges the mock could not record at all; when either
+    counter is non-zero the recording is incomplete.
     """
 
     def __init__(self, *, max_records: int = DEFAULT_MAX_RECORDS) -> None:
@@ -81,11 +83,22 @@ class TrafficRecorder:
         self._started = time.monotonic()
         self.max_records = max_records
         self.dropped = 0
+        self.record_failures = 0
 
     def next_seq(self) -> int:
         with self._lock:
             self._seq += 1
             return self._seq
+
+    def note_record_failure(self) -> None:
+        with self._lock:
+            self.record_failures += 1
+
+    @property
+    def complete(self) -> bool:
+        """``True`` when every request the mock saw is in :meth:`list`."""
+        with self._lock:
+            return self.dropped == 0 and self.record_failures == 0
 
     def elapsed_ms(self) -> int:
         return int((time.monotonic() - self._started) * 1000)
