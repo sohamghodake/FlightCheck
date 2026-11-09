@@ -27,8 +27,9 @@ _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (
         # The value also stops at a backslash that escapes a quote, so redacting JSON text
         # (where " is written \") never eats the escape and breaks the JSON (Phase 8 fix).
+        # The opening quote may itself be escaped (JSON text: token=\"value\", ADR-033).
         re.compile(
-            r"""(?i)(api[_-]?key|secret|token|password)\s*[:=]\s*["']?"""
+            r"""(?i)(api[_-]?key|secret|token|password)\s*[:=]\s*(?:\\?["'])?"""
             r"""(?:[^\s"'\\]|\\(?!["'])){8,}"""
         ),
         r"\1=[REDACTED]",

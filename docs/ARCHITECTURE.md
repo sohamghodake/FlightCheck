@@ -4,7 +4,7 @@ This is the living description of how FlightCheck is structured. Together with
 [DECISIONS.md](DECISIONS.md) it is the source of truth: if the two disagree, the newer ADR wins and
 this file is corrected in the same commit.
 
-**Current state (Phase 9):** `src/flightcheck/__init__.py`, `__main__.py`, `cli/app.py` (with
+**Current state (Phase 11):** `src/flightcheck/__init__.py`, `__main__.py`, `cli/app.py` (with
 `--version`), the `core` package (`models`, `config`, `errors`, `logging`, `redact`, `paths`,
 `capabilities`, `contract`) and the scanner (`scanner/discovery`, `ast_utils`, `parser`,
 `detect`, `engine`, `rules/{bharatcode,robustness,security}`), `orchestrator.run_scan`,
@@ -13,7 +13,7 @@ provider (`mock/{faults,payloads,recorder,app,server}`: JSON and SSE answers, `M
 127.0.0.1; the payload fields the OpenAI SDK needs are listed in §8) and the provider layer
 (`providers/{capabilities,base,http,sse,bharatcode,registry}`: `BharatCodeAdapter`,
 `build_adapter`, `BHARATCODE_PROFILE`; sync, raw httpx2, injected transport and sleep; ADR-016,
-ADR-028), and the runtime layer (`runtime/{harness,scenarios,validators}`: consented child process with a scrubbed environment and a best-effort egress guard, which is not a sandbox; scenarios S01–S06; checks FC-RT-001…008, 011…014, 020, 022, 023, 030, 040, 041, 050, 060; `[test.expect]` expectations) driven by `orchestrator.plan_test` / `run_test` and the `flightcheck test` command (warning panel, per-scenario table, `--keep-traffic`; ADR-017, ADR-018, ADR-029, ADR-030). `runtime/harness.py` is the only module that imports `subprocess`. The diagnostics layer (`diagnostics/{schema,contract_excerpts,sanitize,context,prompt,fake_llm,service}`: `DiagnosticService.prepare` / `explain`, backends `none`/`fake`/`bharatcode`, consent, sanitisation, §19.6 validation, deterministic fallback; ADR-019, ADR-020, ADR-031) is driven by `orchestrator.plan_explain` / `run_explain` and the `flightcheck explain` command; it imports only `core` and `providers`, and the AI output models live in `core.models`. The §19.8 tool-using agent (P1) does not exist. Reporting has three outputs: `reporting/json_report` (schema-versioned JSON), `reporting/terminal` (Rich) and `reporting/html_report` (Phase 9: `build_view` → a redacted, pre-grouped view model; `render_html` with Jinja2 `autoescape=True` and the packaged template `reporting/templates/report.html.j2`; self-contained, no JavaScript; ADR-021, ADR-032). `flightcheck report REPORT.json` re-renders a saved report as HTML or in the terminal, and `scan`/`test`/`explain --format html|all` also write the HTML. CI runs the static and runtime evaluation gates and the dogfood scan (`flightcheck scan src --fail-on low`); `.github/workflows/flightcheck-example.yml` is a manual-only example (docs/CI.md). The `ci` command and Markdown output (P1) do not exist. The generic OpenAI-compatible adapter and the `providers` command (P1) do not exist
+ADR-028), and the runtime layer (`runtime/{harness,scenarios,validators}`: consented child process with a scrubbed environment and a best-effort egress guard, which is not a sandbox; scenarios S01–S06; checks FC-RT-001…008, 011…014, 020, 022, 023, 030, 040, 041, 050, 060; `[test.expect]` expectations) driven by `orchestrator.plan_test` / `run_test` and the `flightcheck test` command (warning panel, per-scenario table, `--keep-traffic`; ADR-017, ADR-018, ADR-029, ADR-030). `runtime/harness.py` is the only module that imports `subprocess`. The diagnostics layer (`diagnostics/{schema,contract_excerpts,sanitize,context,prompt,fake_llm,service}`: `DiagnosticService.prepare` / `explain`, backends `none`/`fake`/`bharatcode`, consent, sanitisation, §19.6 validation, deterministic fallback; ADR-019, ADR-020, ADR-031) is driven by `orchestrator.plan_explain` / `run_explain` and the `flightcheck explain` command; it imports only `core` and `providers`, and the AI output models live in `core.models`. The §19.8 tool-using agent (P1) does not exist. Reporting has three outputs: `reporting/json_report` (schema-versioned JSON), `reporting/terminal` (Rich) and `reporting/html_report` (Phase 9: `build_view` → a redacted, pre-grouped view model; `render_html` with Jinja2 `autoescape=True` and the packaged template `reporting/templates/report.html.j2`; self-contained, no JavaScript; ADR-021, ADR-032). `flightcheck report REPORT.json` re-renders a saved report as HTML or in the terminal, and `scan`/`test`/`explain --format html|all` also write the HTML. CI runs the static and runtime evaluation gates and the dogfood scan (`flightcheck scan src --fail-on low`); `.github/workflows/flightcheck-example.yml` is a manual-only example (docs/CI.md). The `ci` command and Markdown output (P1) do not exist. Phase 11 added the security suite (`tests/security`: leak matrix over every output, no-execution, path traversal, keys in `flightcheck.toml`) and the import-boundary test `tests/architecture/test_imports.py` (§3, ADR-034); `core.redact` also matches JSON-escaped `key=value` values (ADR-033). The generic OpenAI-compatible adapter and the `providers` command (P1) do not exist
 yet. Contract facts shared by the scanner, the mock and the adapter live in `core.config` and
 `core.contract` (ADR-027, ADR-028); capability types live in `core.capabilities`. Conventions settled while building `core` are in ADR-023; scanner resolution and detection
 rules are in ADR-011 and ADR-024. Everything else below is the target design. Modules are created
@@ -54,7 +54,7 @@ flowchart TB
 
 ## 3. Import boundaries
 
-Enforced by an import test from Phase 11.
+Enforced by `tests/architecture/test_imports.py` (Phase 11, ADR-034).
 
 ```text
 core          → (stdlib, pydantic only)
@@ -64,13 +64,15 @@ runtime       → core, mock
 providers     → core
 diagnostics   → core, providers
 reporting     → core
-orchestrator  → core, scanner, runtime, diagnostics, reporting, providers
+orchestrator  → core, scanner, runtime, diagnostics, reporting, providers, mock (ADR-034)
 cli           → orchestrator, reporting, core
 ```
 
-No module may import `cli`. `scanner` must never import `providers` or `runtime`, nor
-`subprocess`, `importlib` or `runpy`: `scan` stays network-free and execution-free by
-construction.
+No module may import `cli` except the entry point `flightcheck/__main__.py`. Any layer may
+import the root package (`flightcheck.__version__`). `scanner` must never import `providers`,
+`runtime`, `mock` or `diagnostics`, nor `subprocess`, `importlib`, `runpy`, `socket`, `http` or
+`urllib`: `scan` stays network-free and execution-free by construction. Third-party imports
+per layer follow §5 (pydantic everywhere; ADR-034 item 4).
 
 ## 4. Components
 
@@ -101,7 +103,7 @@ construction.
 | Package           | Layer              | Responsibility                                    | Depends on                    |
 | ----------------- | ------------------ | ------------------------------------------------- | ----------------------------- |
 | `cli`             | CLI                | Argument parsing, rendering, exit codes           | orchestrator, reporting, core |
-| `orchestrator.py` | application        | Use-case wiring                                   | all below                     |
+| `orchestrator.py` | application        | Use-case wiring (starts the mock for `test`)      | all below                     |
 | `core`            | core/configuration | Models, config, errors, logging, redaction, paths | stdlib, pydantic              |
 | `scanner`         | scanner            | Discovery, AST index, detection, rules            | core                          |
 | `providers`       | provider           | Adapters, capabilities, HTTP, SSE                 | core, httpx2                  |

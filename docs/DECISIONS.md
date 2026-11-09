@@ -941,3 +941,66 @@ Format:
   `packages = ["src/flightcheck"]` (checked with `uv build --wheel` and `unzip -l`); no
   `pyproject.toml` change. ADR-025 item 1's "`--format html|all` exits 2" and ADR-031 item
   11's same sentence are superseded by item 1 here.
+
+## ADR-033 — Redaction: JSON-escaped `key=value` values; accepted limits
+
+- Date: 2026-11-09 · Phase: 11 · Status: accepted
+- Context: Phase 8 recorded that `core.redact`'s `key=value` pattern did not match a value
+  whose opening quote is JSON-escaped (`token=\"abcdefghij\"` inside JSON text): the optional
+  quote group did not allow the backslash, so the value never started. Every output already
+  redacts leaf strings before serialising, so no output leaked through this, but the
+  defence-in-depth passes over JSON text (the dry-run's payload, the HTML's pretty-printed
+  traffic bodies) were blind to it. Plan §27 Phase 11 item 15 asks that secrets split across
+  lines be documented as a limitation.
+- Decision:
+  1. **Fixed in the shared path.** The pattern's opening quote may be escaped:
+     `\s*[:=]\s*(?:\\?["'])?` before the value. The value still stops at a backslash that
+     escapes a quote (the Phase 8 fix), so `token=\"value\"` becomes `token=[REDACTED]\"`
+     and the surrounding JSON stays valid; redaction stays idempotent. Test:
+     `tests/unit/test_redact.py::test_key_value_pattern_matches_a_json_escaped_value_phase11`;
+     the Phase 8 regression test is unchanged and green.
+  2. **Accepted limitations** (documented in docs/RULES.md "Explicit limitations"):
+     redaction is pattern- and value-based; a secret split across lines or assembled at
+     runtime from pieces is not recognised in source text (only its assembled value, when it
+     reaches an output); unprefixed or short literals are masked only where a rule sees them
+     assigned to a key-like name (ADR-026); environment values shorter than 8 characters are
+     not redacted by value (they would mangle normal text). The JSON dict-key form inside JSON
+     text (`{\"api_key\": \"value\"}`) is not matched by the `key=value` pattern; it is covered
+     by leaf-string redaction before serialising.
+- Consequences: The leak matrix (`tests/security/test_leak_matrix.py`) found no leak in any
+  output; a test checks that RULES.md documents the split-across-lines limit. Report bytes do
+  not change for existing fixtures (schema drift test and eval unchanged).
+
+## ADR-034 — Import rules as enforced in Phase 11 (orchestrator → mock, entry point)
+
+- Date: 2026-11-09 · Phase: 11 · Status: accepted
+- Context: Plan §12.2 lists `orchestrator → core, scanner, runtime, diagnostics, reporting,
+  providers`, but `orchestrator.py` imports `flightcheck.mock.server.MockServer`: it starts a
+  fresh mock server per scenario for `test` (Phase 7A) and hands its URL to
+  `runtime.harness.run_app`. `src/flightcheck/__main__.py` imports `cli` for
+  `python -m flightcheck`, while §12.2 says no module may import `cli`.
+- Decision:
+  1. **orchestrator → mock is allowed.** The orchestrator is the use-case wiring layer that
+     already depends on everything below it; starting the mock is wiring, and `runtime`
+     already depends on `mock`. Moving the server start behind `runtime` would rewrite
+     working, tested Phase 7A code for no behavioural gain. `docs/ARCHITECTURE.md` §3 is
+     updated to match.
+  2. **`__main__.py` is the one module allowed to import `cli`** (the console entry point);
+     every other module, including all of `src/flightcheck/<package>/`, may not.
+  3. **The root package** (`from flightcheck import __version__`) may be imported by any
+     layer; `flightcheck/__init__.py` itself imports nothing internal.
+  4. **Third-party allowlist per layer** (§5 table, made explicit): pydantic everywhere
+     (models); scanner, runtime and orchestrator nothing else; mock fastapi, starlette,
+     uvicorn; providers httpx2; diagnostics httpx2 (transport injection type only);
+     reporting jinja2, rich; cli typer, rich, click. Relative imports are not used and are
+     reported (the checks need absolute names). `scanner` may not import `subprocess`,
+     `importlib`, `runpy`, `socket`, `http` or `urllib`, nor `providers`, `runtime`, `mock`
+     or `diagnostics`.
+  5. `tests/architecture/test_imports.py` parses every module with `ast` (including
+     `TYPE_CHECKING` imports) and enforces items 1–4; a control test proves a forbidden
+     import is reported. The narrower existing tests stay (core: `tests/unit/test_core_imports.py`;
+     scanner exec/eval/compile: `tests/scanner/test_detect.py`; subprocess only in
+     `runtime/harness.py`: `tests/runtime/test_harness.py`; diagnostics:
+     `tests/diagnostics/test_context.py`).
+- Consequences: A new dependency edge needs an ADR and an update to both the test tables and
+  `docs/ARCHITECTURE.md` §3/§5.

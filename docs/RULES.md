@@ -100,5 +100,12 @@ These are copied from plan §16.2 and ADR-011. A plain-text version is shown in 
   in a function defined inside a `try`, counts as unprotected (FC-GEN-004, FC-GEN-006). A function
   called only from inside a `try` is not analysed.
 - **FC-GEN-005** does not see `OpenAI(**kwargs)`; a timeout passed that way is a false positive.
+- **Redaction is pattern- and value-based** (`core/redact.py`, ADR-033). It replaces `bc_live_`
+  and `sk-` keys, `Bearer` tokens, `api_key=` / `token=` / `secret=` / `password=` assignments
+  (also when the quote is JSON-escaped), keys read from the environment, and exact values of
+  secret-named environment variables of 8 or more characters. A secret **split across lines**
+  or assembled from pieces at runtime (`"bc_live_" + tail`) is not recognised in source text;
+  only its assembled value is, when it reaches an output. Short or unprefixed literals are
+  masked only where a rule sees them assigned to a key-like name (ADR-026).
 - **Static findings never claim runtime behaviour.** "Requests from this call site will …" is used
   only for documented contract rules with literal evidence; everything else uses "may".

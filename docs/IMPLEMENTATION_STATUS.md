@@ -1,4 +1,4 @@
-# Implementation status — updated 2026-11-09 (Phase 9)
+# Implementation status — updated 2026-11-09 (Phase 11)
 
 | Phase | Title                                                                     | Status      | Date       | Commit                                         | Notes                                                    |
 | ----- | ------------------------------------------------------------------------- | ----------- | ---------- | ---------------------------------------------- | -------------------------------------------------------- |
@@ -15,7 +15,7 @@
 | 8     | AI diagnostics and `explain`                                              | done        | 2026-11-09 | `feat(diagnostics): explain command with BharatCode backend (phase 8)` | 1282 tests; ADR-019, ADR-020, ADR-031; agent loop (P1) not built; no live run (no key); see PHASE_08.md |
 | 9     | HTML report, `report` command, CI workflows                               | done        | 2026-11-09 | `feat(report): HTML report and CI integration (phase 9)` | 1322 tests; ADR-021, ADR-032; dogfood fix in the parser; `ci` command and Markdown (P1) not built; see PHASE_09.md |
 | 10    | Live BharatCode probe and golden transcripts                              | not started |            |                                                | P1 (P0 if a key arrives by Day 3); needs an API key      |
-| 11    | Security hardening, architecture tests, QA pass                           | not started |            |                                                |                                                          |
+| 11    | Security hardening, architecture tests, QA pass                           | done        | 2026-11-09 | `test: security and architecture hardening (phase 11)` | 1445 tests; ADR-033, ADR-034; 0 leaks; redact fix (JSON-escaped values); see PHASE_11.md |
 | 12    | Documentation, demo, `BharatCode.txt`, submission                         | not started |            |                                                | Early run on Day 2, final run on Day 4                   |
 
 The commit column names the phase commit by its message; find its hash with
@@ -70,8 +70,8 @@ The commit column names the phase commit by its message; find its hash with
   `render_html`, `write_html`) renders the packaged template
   `reporting/templates/report.html.j2` (Jinja2 `autoescape=True`, no JavaScript, no external
   assets; ADR-021, ADR-032).
-- Tests: 1322 (`tests/cli`, `tests/unit`, `tests/scanner`, `tests/security`, `tests/mock`,
-  `tests/providers`, `tests/runtime`, `tests/diagnostics`; fixtures in
+- Tests: 1445 (`tests/cli`, `tests/unit`, `tests/scanner`, `tests/security`, `tests/mock`,
+  `tests/providers`, `tests/runtime`, `tests/diagnostics`, `tests/architecture`; fixtures in
   `tests/fixtures/parse`, `tests/fixtures/rules` and the 13 apps in `tests/fixtures/apps`,
   expectations in `tests/fixtures/expected_findings.json`);
   `FLIGHTCHECK_NO_NETWORK=1` is set for every test. `slow` tests: the 200-file index test,
@@ -85,24 +85,26 @@ The commit column names the phase commit by its message; find its hash with
   `python scripts/eval_fixtures.py --check --runtime` and the dogfood
   `flightcheck scan src --fail-on low` on 3.11/3.12/3.13);
   `.github/workflows/flightcheck-example.yml` is manual-only (`workflow_dispatch`; docs/CI.md).
-  Phases 0–7B are pushed and CI is green on GitHub (Python 3.11/3.12/3.13). Phase 8 is pushed
-  (`origin/main` is at the Phase 8 commit) but its CI result could not be checked from this
-  session (no `gh` CLI); the developer confirms it. Phase 9 is committed locally and not yet
-  pushed; its new CI steps ran locally only.
+  Phases 0–9 are pushed and CI is green on GitHub (Python 3.11/3.12/3.13; confirmed by the
+  developer, no `gh` CLI in this session). Phase 11 is committed locally and not yet pushed.
+- Security and architecture (Phase 11): `tests/security` (leak matrix over every output,
+  no-execution, path traversal, keys in `flightcheck.toml`, scan redaction) and
+  `tests/architecture/test_imports.py` (ADR-034; orchestrator → mock allowed). `core.redact`
+  matches JSON-escaped `key=value` values (ADR-033); accepted redaction limits are listed in
+  docs/RULES.md.
 - Known broken: nothing.
 - BharatCode key available: no (never paste the key).
 - Plan: `docs/FLIGHTCHECK_IMPLEMENTATION_PHASE_PLAN.md`, local-only and git-ignored (ADR-000).
 
 ## Next phase
 
-- Phase 11: Security hardening, architecture tests, QA pass (same chat as Phase 9, separate
-  prompt). Start from docs/handoffs/PHASE_09.md. Confirm the `actions/upload-artifact` major
+- Phase 12 FINAL (10 Nov, before the 21:00 IST freeze); Phase 10 only once a BharatCode key
+  exists. Start from docs/handoffs/PHASE_11.md. Confirm the `actions/upload-artifact` major
   used by the example workflow (ADR-032 item 5). Still open (P1): the `ci` command, Markdown
-  output, the §19.8 tool-using diagnostic agent, the
-  malformed-JSON repair attempt, FC-BC-009, FC-GEN-008/009, FC-SEC-003,
-  FC-RT-010/031/042/043, scenarios S02b/S07–S10, `use_current_python`, `--force-exec`,
-  `flightcheck test --config FILE`, the generic OpenAI-compatible adapter and the `providers`
-  command.
+  output, the §19.8 tool-using diagnostic agent, the malformed-JSON repair attempt,
+  FC-BC-009, FC-GEN-008/009, FC-SEC-003, FC-RT-010/031/042/043, scenarios S02b/S07–S10,
+  `use_current_python`, `--force-exec`, `flightcheck test --config FILE`, the generic
+  OpenAI-compatible adapter and the `providers` command.
 
 ## Dropped / deferred (per plan §7.3)
 

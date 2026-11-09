@@ -136,3 +136,22 @@ def test_key_value_pattern_keeps_json_text_valid_phase8():
     assert json.loads(redact(text, environ=NO_ENV)) == {"snippet": once}
     # A backslash inside a value is still part of it; only an escaped quote ends it.
     assert redact(r"password=abc\def12345", environ=NO_ENV) == "password=[REDACTED]"
+
+
+def test_key_value_pattern_matches_a_json_escaped_value_phase11():
+    """Phase 11 (ADR-033): inside JSON text a quoted value is written ``token=\\"value\\"``;
+    the escaped opening quote no longer hides the value, and the JSON stays valid."""
+    import json
+
+    value = "abcdefghij" + "LEAK11"
+    for name in ("token", "api_key", "password", "secret"):
+        text = json.dumps({"line": f'{name}="{value}"'})
+        out = redact(text, environ=NO_ENV)
+        assert value not in out, name
+        assert json.loads(out) == {"line": f'{name}=[REDACTED]"'}
+        assert redact(out, environ=NO_ENV) == out  # idempotent
+    single = json.dumps({"line": f"token='{value}'"})  # single quotes are not escaped in JSON
+    assert value not in redact(single, environ=NO_ENV)
+    # Short escaped values and backslashes not followed by a quote behave as before.
+    assert redact(r"token=\"short\"", environ=NO_ENV) == r"token=\"short\""
+    assert redact(r"password=abc\def12345", environ=NO_ENV) == "password=[REDACTED]"
