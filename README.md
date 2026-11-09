@@ -44,7 +44,3 @@ flightcheck --version
 ```bash
 ruff check . && ruff format --check . && pytest -m "not live" -q
 ```
-
-## License
-
-MIT. See [LICENSE](LICENSE).

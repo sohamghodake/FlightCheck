@@ -114,7 +114,7 @@ construction.
 ## 6. Target repository layout (condensed)
 
 ```text
-BharatCode.txt  README.md  CLAUDE.md  LICENSE  pyproject.toml  .gitignore
+BharatCode.txt  README.md  CLAUDE.md  pyproject.toml  .gitignore
 .github/workflows/ci.yml               ruff + pytest on 3.11/3.12/3.13 (dogfood scan from Phase 9)
 docs/                                  ARCHITECTURE, DECISIONS, IMPLEMENTATION_STATUS, QUALITY_GATES,
                                        BHARATCODE_CONTRACT, RULES, CI, EVALUATION, report.schema.json,
