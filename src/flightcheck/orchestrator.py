@@ -30,6 +30,12 @@ from flightcheck.core.models import (
     TestRequest,
     worst_status,
 )
+from flightcheck.diagnostics.service import (
+    ConsentInfo,
+    DiagnosticService,
+    ExplainOptions,
+    ExplainPlan,
+)
 from flightcheck.mock.server import MockServer
 from flightcheck.runtime.harness import (
     AppLaunchError,
@@ -46,6 +52,7 @@ from flightcheck.runtime.scenarios import (
     Scenario,
 )
 from flightcheck.runtime.validators import (
+    CHECKS,
     CheckConfig,
     by_seq,
     error_all,
@@ -452,8 +459,48 @@ def run_test(
     )
 
 
+# --- explain (Phase 8) ----------------------------------------------------------------------
+
+
+def check_catalogue() -> dict[str, tuple[str, str]]:
+    """Runtime check ID → (title, remediation). Diagnostics may not import the runtime, so the
+    orchestrator hands it the catalogue for ``needs_review`` checks (ADR-031)."""
+    return {check_id: (meta.title, meta.remediation) for check_id, meta in CHECKS.items()}
+
+
+def explain_service(config: FlightCheckConfig, **kwargs: object) -> DiagnosticService:
+    """``kwargs`` are test injections (``transport``, ``sleep``, ``now``, ``clock``)."""
+    return DiagnosticService(config, catalogue=check_catalogue(), **kwargs)  # type: ignore[arg-type]
+
+
+def plan_explain(
+    report: Report, config: FlightCheckConfig, options: ExplainOptions, **kwargs: object
+) -> ExplainPlan:
+    """Select context and build the requests; no network, no consent (also ``--dry-run``)."""
+    return explain_service(config, **kwargs).prepare(report, options)
+
+
+def run_explain(
+    report: Report,
+    config: FlightCheckConfig,
+    options: ExplainOptions,
+    *,
+    plan: ExplainPlan | None = None,
+    **kwargs: object,
+) -> Report:
+    """A copy of ``report`` with ``ai_suggestions``; nothing else changes (ADR-019)."""
+    return explain_service(config, **kwargs).explain(report, options, plan=plan)
+
+
 __all__ = [
+    "ConsentInfo",
+    "ExplainOptions",
+    "ExplainPlan",
     "TestPlan",
+    "check_catalogue",
+    "explain_service",
+    "plan_explain",
+    "run_explain",
     "hardcoded_base_urls",
     "plan_test",
     "require_consent",

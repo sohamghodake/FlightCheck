@@ -3,11 +3,10 @@
 Statuses are never collapsed: findings carry a kind and a verification level; checks carry one
 of six statuses; AI output lives in its own list and is never counted with findings or checks.
 
-One field is deliberately loose until the phase that owns its model exists:
-
-- ``Report.ai_suggestions``       -> ``AISuggestion`` / ``AIExplanation`` (Phase 8, diagnostics)
-
 ``Report.capability_profile`` is a ``CapabilityProfile`` (core/capabilities.py, Phase 6).
+``Report.ai_suggestions`` is a list of ``AISuggestion`` (Phase 8). The AI output models
+(``AIPatch``, ``AIExplanation``, ``AISuggestion``) live here because core may not import
+``diagnostics``; ``diagnostics.schema`` re-exports them (ADR-031).
 """
 
 from __future__ import annotations
@@ -311,6 +310,62 @@ class Summary(_Model):
         )
 
 
+# --- AI output (§19.6, §21.3; ADR-019, ADR-031) --------------------------------------------
+
+AI_LABEL = "AI suggestion — not verified, review before applying"
+
+
+class AIPatch(_Model):
+    path: str
+    original_snippet: str
+    proposed_snippet: str
+
+
+class AIExplanation(_Model):
+    rule_id: str
+    finding_ids: list[str]
+    summary: str = Field(max_length=600)
+    root_cause: str = Field(max_length=1200)
+    impact: str = Field(max_length=800)
+    fix_steps: list[str] = Field(max_length=6)
+    patch: AIPatch | None = None
+    caveats: list[str] = Field(default_factory=list, max_length=5)
+    model_stated_confidence: Literal["low", "medium", "high"]
+
+
+class AISuggestion(_Model):
+    """One explained finding group, or the deterministic fallback for it.
+
+    Separate from findings and checks: nothing here changes a status, severity or count
+    (ADR-019). ``rule_id``, ``title``, ``severity``, ``finding_ids`` and ``remediation`` are
+    additive to plan §21.3 (ADR-031): they say which group this entry is about and carry the
+    deterministic remediation shown when ``explanation`` is ``None``.
+    """
+
+    rule_id: str
+    title: str
+    severity: Severity
+    finding_ids: list[str]  # Finding.id or CheckResult.id of every instance in the group
+    remediation: str  # deterministic text (rule catalogue); "" when none is known
+    explanation: AIExplanation | None
+    backend: Literal["none", "fake", "bharatcode"]
+    model: str | None
+    request_id: str | None
+    structured_output: Literal["json_schema", "prompt_only", "n/a"]
+    latency_ms: int | None
+    diff: str | None  # locally generated unified diff, labelled AI_LABEL
+    fallback_reason: str | None
+    rejected_reason: str | None
+    generated_at: datetime
+
+    @field_validator("generated_at")
+    @classmethod
+    def _require_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("generated_at must be timezone-aware (use datetime.now(UTC))")
+        return value
+
+
 class Report(_Model):
     metadata: ReportMetadata
     repo: RepoMetadata | None
@@ -319,8 +374,7 @@ class Report(_Model):
     findings: list[Finding] = Field(default_factory=list)
     scenarios: list[ScenarioResult] = Field(default_factory=list)
     diagnostics: list[Diagnostic] = Field(default_factory=list)
-    # Placeholder until Phase 8 defines AISuggestion; Phase 8 must tighten this type.
-    ai_suggestions: list[dict[str, Any]] = Field(default_factory=list)
+    ai_suggestions: list[AISuggestion] = Field(default_factory=list)  # never counted (ADR-019)
     summary: Summary
 
 

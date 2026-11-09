@@ -25,7 +25,12 @@ _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"sk-[A-Za-z0-9_\-]{12,}"), "sk-…[REDACTED]"),
     (re.compile(r"(?i)bearer\s+[A-Za-z0-9._\-]{8,}"), "Bearer [REDACTED]"),
     (
-        re.compile(r"""(?i)(api[_-]?key|secret|token|password)\s*[:=]\s*["']?[^\s"']{8,}"""),
+        # The value also stops at a backslash that escapes a quote, so redacting JSON text
+        # (where " is written \") never eats the escape and breaks the JSON (Phase 8 fix).
+        re.compile(
+            r"""(?i)(api[_-]?key|secret|token|password)\s*[:=]\s*["']?"""
+            r"""(?:[^\s"'\\]|\\(?!["'])){8,}"""
+        ),
         r"\1=[REDACTED]",
     ),
 )

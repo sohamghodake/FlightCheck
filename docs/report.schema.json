@@ -1,5 +1,253 @@
 {
   "$defs": {
+    "AIExplanation": {
+      "additionalProperties": false,
+      "properties": {
+        "rule_id": {
+          "title": "Rule Id",
+          "type": "string"
+        },
+        "finding_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Finding Ids",
+          "type": "array"
+        },
+        "summary": {
+          "maxLength": 600,
+          "title": "Summary",
+          "type": "string"
+        },
+        "root_cause": {
+          "maxLength": 1200,
+          "title": "Root Cause",
+          "type": "string"
+        },
+        "impact": {
+          "maxLength": 800,
+          "title": "Impact",
+          "type": "string"
+        },
+        "fix_steps": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 6,
+          "title": "Fix Steps",
+          "type": "array"
+        },
+        "patch": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AIPatch"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "caveats": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 5,
+          "title": "Caveats",
+          "type": "array"
+        },
+        "model_stated_confidence": {
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "title": "Model Stated Confidence",
+          "type": "string"
+        }
+      },
+      "required": [
+        "rule_id",
+        "finding_ids",
+        "summary",
+        "root_cause",
+        "impact",
+        "fix_steps",
+        "model_stated_confidence"
+      ],
+      "title": "AIExplanation",
+      "type": "object"
+    },
+    "AIPatch": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "original_snippet": {
+          "title": "Original Snippet",
+          "type": "string"
+        },
+        "proposed_snippet": {
+          "title": "Proposed Snippet",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "original_snippet",
+        "proposed_snippet"
+      ],
+      "title": "AIPatch",
+      "type": "object"
+    },
+    "AISuggestion": {
+      "additionalProperties": false,
+      "description": "One explained finding group, or the deterministic fallback for it.\n\nSeparate from findings and checks: nothing here changes a status, severity or count\n(ADR-019). ``rule_id``, ``title``, ``severity``, ``finding_ids`` and ``remediation`` are\nadditive to plan §21.3 (ADR-031): they say which group this entry is about and carry the\ndeterministic remediation shown when ``explanation`` is ``None``.",
+      "properties": {
+        "rule_id": {
+          "title": "Rule Id",
+          "type": "string"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "finding_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Finding Ids",
+          "type": "array"
+        },
+        "remediation": {
+          "title": "Remediation",
+          "type": "string"
+        },
+        "explanation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AIExplanation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "backend": {
+          "enum": [
+            "none",
+            "fake",
+            "bharatcode"
+          ],
+          "title": "Backend",
+          "type": "string"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Model"
+        },
+        "request_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Request Id"
+        },
+        "structured_output": {
+          "enum": [
+            "json_schema",
+            "prompt_only",
+            "n/a"
+          ],
+          "title": "Structured Output",
+          "type": "string"
+        },
+        "latency_ms": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Latency Ms"
+        },
+        "diff": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Diff"
+        },
+        "fallback_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Fallback Reason"
+        },
+        "rejected_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Rejected Reason"
+        },
+        "generated_at": {
+          "format": "date-time",
+          "title": "Generated At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "rule_id",
+        "title",
+        "severity",
+        "finding_ids",
+        "remediation",
+        "explanation",
+        "backend",
+        "model",
+        "request_id",
+        "structured_output",
+        "latency_ms",
+        "diff",
+        "fallback_reason",
+        "rejected_reason",
+        "generated_at"
+      ],
+      "title": "AISuggestion",
+      "type": "object"
+    },
     "AppRun": {
       "additionalProperties": false,
       "properties": {
@@ -944,8 +1192,7 @@
     },
     "ai_suggestions": {
       "items": {
-        "additionalProperties": true,
-        "type": "object"
+        "$ref": "#/$defs/AISuggestion"
       },
       "title": "Ai Suggestions",
       "type": "array"

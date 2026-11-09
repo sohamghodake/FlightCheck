@@ -1,4 +1,4 @@
-# Implementation status — updated 2026-11-09 (Phase 7B)
+# Implementation status — updated 2026-11-09 (Phase 8)
 
 | Phase | Title                                                                     | Status      | Date       | Commit                                         | Notes                                                    |
 | ----- | ------------------------------------------------------------------------- | ----------- | ---------- | ---------------------------------------------- | -------------------------------------------------------- |
@@ -12,7 +12,7 @@
 | 6     | Provider adapters and capability registry                                 | done        | 2026-11-07 | `feat(providers): BharatCode adapter and capability registry (phase 6)` | 982 tests; ADR-016, ADR-028; generic adapter (P1) not built; see PHASE_06.md |
 | 7A    | Runtime harness, validators, scenarios S01/S02/S04                        | done        | 2026-11-07 | `feat(runtime): harness, validators, scenarios S01 S02 S04 (phase 7A)` | 1118 tests; ADR-017, ADR-018, ADR-029; `run_test` internal only; see PHASE_07A.md |
 | 7B    | Scenarios S03/S05/S06, `test` command, runtime expectations               | done        | 2026-11-09 | `feat: test command with truncation, tool and stream-failure scenarios (phase 7B)` | 1188 tests; ADR-030; `--config` deferred (P1); see PHASE_07B.md |
-| 8     | AI diagnostics and `explain`                                              | not started |            |                                                | Tool-using agent is P1                                   |
+| 8     | AI diagnostics and `explain`                                              | done        | 2026-11-09 | `feat(diagnostics): explain command with BharatCode backend (phase 8)` | 1282 tests; ADR-019, ADR-020, ADR-031; agent loop (P1) not built; no live run (no key); see PHASE_08.md |
 | 9     | HTML report, `report` command, CI workflows                               | not started |            |                                                | P0-lite; `ci` command is P1                              |
 | 10    | Live BharatCode probe and golden transcripts                              | not started |            |                                                | P1 (P0 if a key arrives by Day 3); needs an API key      |
 | 11    | Security hardening, architecture tests, QA pass                           | not started |            |                                                |                                                          |
@@ -30,8 +30,11 @@ The commit column names the phase commit by its message; find its hash with
   `-v`; `--format html|all` exits 2 until Phase 9); `flightcheck test PATH --allow-exec`
   (Phase 7B: warning panel, scenarios S01–S06, per-scenario table, failed/needs-review details
   with traffic excerpts, merged scan unless `--no-scan`, `--scenario`, `--timeout`,
-  `--fail-on`, `--keep-traffic`, `--format terminal|json`; `--config` exits 2, P1).
-  `explain` and `report` come later.
+  `--fail-on`, `--keep-traffic`, `--format terminal|json`; `--config` exits 2, P1);
+  `flightcheck explain REPORT.json` (Phase 8: `--llm none|fake|bharatcode`, `--context
+  metadata|snippets`, `--repo`, `--max-findings`, `--model`, `--yes`, `--dry-run`, `--output`,
+  `--format terminal|json`; consent panel for BharatCode, deterministic fallback with a reason,
+  writes `<report>.explained.json`). `report` comes later.
 - Package: `src/flightcheck/{__init__,__main__}.py`, `cli/{__init__,app}.py`,
   `core/{models,config,errors,logging,redact,paths}.py` (stdlib + pydantic only, enforced by
   `tests/unit/test_core_imports.py`) and `scanner/{__init__,discovery,ast_utils,parser,detect}.py`
@@ -54,21 +57,26 @@ The commit column names the phase commit by its message; find its hash with
   `python scripts/eval_fixtures.py` writes `docs/EVALUATION.md`; `--check` runs the §26.2 gates;
   `--runtime` also runs every fixture app on the mock and gates runtime agreement (100 %). The scanner
   imports no `subprocess`/`importlib`/`runpy`/`providers`/`runtime` and calls no
-  `exec`/`eval`/`compile` (enforced by `tests/scanner/test_detect.py`).
-- Tests: 1188 (`tests/cli`, `tests/unit`, `tests/scanner`, `tests/security`, `tests/mock`,
-  `tests/providers`, `tests/runtime`; fixtures in
+  `exec`/`eval`/`compile` (enforced by `tests/scanner/test_detect.py`). The diagnostics layer
+  `diagnostics/{schema,contract_excerpts,sanitize,context,prompt,fake_llm,service}.py`
+  (Phase 8: `DiagnosticService.prepare/explain`, behind `orchestrator.plan_explain` /
+  `run_explain`; imports only `core` and `providers`, enforced by
+  `tests/diagnostics/test_context.py`); `AIPatch`/`AIExplanation`/`AISuggestion` live in
+  `core.models` (ADR-031).
+- Tests: 1282 (`tests/cli`, `tests/unit`, `tests/scanner`, `tests/security`, `tests/mock`,
+  `tests/providers`, `tests/runtime`, `tests/diagnostics`; fixtures in
   `tests/fixtures/parse`, `tests/fixtures/rules` and the 13 apps in `tests/fixtures/apps`,
   expectations in `tests/fixtures/expected_findings.json`);
   `FLIGHTCHECK_NO_NETWORK=1` is set for every test. `slow` tests: the 200-file index test,
   the `MockServer` / OpenAI-SDK tests in `tests/mock` and the child-process tests in
   `tests/runtime` (127.0.0.1 sockets only; fixture `timeout_s` 20).
-- Placeholder types to tighten later (ADR-023 item 7): `Report.ai_suggestions` (Phase 8).
-  `ScenarioResult.exchanges` is now `list[RecordedExchange]` (Phase 5A);
+- Placeholder types (ADR-023 item 7): all tightened. `Report.ai_suggestions` is now
+  `list[AISuggestion]` (Phase 8); `ScenarioResult.exchanges` is `list[RecordedExchange]` (Phase 5A);
   `Report.capability_profile` is `CapabilityProfile` and `ProviderConfig.declared_capabilities`
   is `dict[Capability, bool]` (Phase 6).
 - CI: `.github/workflows/ci.yml` (ruff check, ruff format --check, pytest, then
   `python scripts/eval_fixtures.py --check` on 3.11/3.12/3.13).
-  Phases 0–7A are pushed and CI is green on GitHub (Python 3.11/3.12/3.13); Phase 7B is
+  Phases 0–7B are pushed and CI is green on GitHub (Python 3.11/3.12/3.13); Phase 8 is
   committed locally and not yet pushed.
 - Known broken: nothing.
 - BharatCode key available: no (never paste the key).
@@ -76,11 +84,14 @@ The commit column names the phase commit by its message; find its hash with
 
 ## Next phase
 
-- Phase 8: AI diagnostics and `explain` (tool-using agent is P1). Start from
-  docs/handoffs/PHASE_07B.md. Still open (P1): FC-BC-009, FC-GEN-008/009, FC-SEC-003,
+- Phase 9: HTML report, `report` command, CI workflows (P0-lite; `ci` command is P1). Start
+  from docs/handoffs/PHASE_08.md; the HTML report renders `ai_suggestions` as a separate,
+  labelled section (ADR-019). Still open (P1): the §19.8 tool-using diagnostic agent, the
+  malformed-JSON repair attempt, FC-BC-009, FC-GEN-008/009, FC-SEC-003,
   FC-RT-010/031/042/043, scenarios S02b/S07–S10, `use_current_python`, `--force-exec`,
   `flightcheck test --config FILE`, the generic OpenAI-compatible adapter and the `providers`
   command. CI still runs `eval_fixtures.py --check` without `--runtime` (Phase 9 CI work).
+  The `explain` hint in `scan`/`test` exit lines (ADR-025 item 5) is not added yet (ADR-031).
 
 ## Dropped / deferred (per plan §7.3)
 

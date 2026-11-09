@@ -124,3 +124,15 @@ def test_very_long_text_is_fast() -> None:
     out = redact(text, environ=NO_ENV)
     assert time.perf_counter() - start < 2.0
     assert out.endswith("bc_live_…[REDACTED]")
+
+
+def test_key_value_pattern_keeps_json_text_valid_phase8():
+    """Phase 8 fix: redacting JSON text that holds an already-redacted ``api_key=...`` value
+    must not eat the backslash of the escaped closing quote (it broke the explain payload)."""
+    import json
+
+    once = redact('client = OpenAI(api_key="bc_live_abcdefgh12")', environ=NO_ENV)
+    text = json.dumps({"snippet": once})
+    assert json.loads(redact(text, environ=NO_ENV)) == {"snippet": once}
+    # A backslash inside a value is still part of it; only an escaped quote ends it.
+    assert redact(r"password=abc\def12345", environ=NO_ENV) == "password=[REDACTED]"

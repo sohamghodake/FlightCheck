@@ -739,3 +739,114 @@ Format:
   `expected_runtime.json` (no expectations there); tests set expectations with
   `load_config(root, overrides={"test": {"expect": ...}})`. `on_busy_exhausted` is parsed but
   unused until S02b (P1). The pre-flight index is built once, in `plan_test`.
+
+## ADR-019 — LLM output stored separately; never changes statuses
+
+- Date: 2026-11-09 · Phase: 8 · Status: accepted
+- Context: `explain` adds BharatCode-generated text to a finished report. An LLM must never be
+  able to decide whether a finding is valid, change a status or severity, or move an exit code
+  (plan §19.1, ADR-006).
+- Decision: `DiagnosticService.explain(report, options)` returns a deep copy whose only
+  differences are `Report.ai_suggestions` (a list of `AISuggestion`, one per selected finding
+  group) and `summary.ai_suggestions` (the number of suggestions that carry a validated
+  `explanation`; fallbacks are not counted). Findings, checks, scenarios, diagnostics,
+  `metadata` and every other summary count are untouched; the input object is not mutated.
+  AI text is redacted and validated (§19.6) before it is stored; patches become a diff made
+  locally with `difflib`, labelled "AI suggestion — not verified, review before applying".
+  `explain` never exits 1: success and fallback both exit 0.
+- Consequences: Tests compare `model_dump_json()` of everything except the two AI fields byte
+  for byte (service and CLI, scan and test reports). The HTML report (Phase 9) renders
+  `ai_suggestions` as a separate section.
+
+## ADR-020 — Default context = metadata
+
+- Date: 2026-11-09 · Phase: 8 · Status: accepted
+- Context: The cheapest safe default for data that leaves the machine (plan §19.3, ADR-006).
+- Decision: `ExplainConfig.context` defaults to `metadata`: rule ID, title, remediation, the
+  contract excerpt, the finding message, repo-relative path and lines, provider classification,
+  and a check's expected/observed capped at 300 characters. No source lines and no traffic
+  bodies. `--context snippets` adds ±8 lines per finding (≤ 40 lines, ≤ 12 000 characters in
+  total; files read only through `resolve_inside(--repo, path)`) and redacted request bodies of
+  a check's traffic evidence (≤ 2 000 characters per check, headers never included). Patches
+  are accepted only at the `snippets` level.
+- Consequences: The consent panel's "Files" line reads "none (no source code is sent)" by
+  default. A wrong `--repo` omits the snippet with a note printed on stderr and in the panel.
+
+## ADR-031 — `explain` conventions settled in Phase 8
+
+- Date: 2026-11-09 · Phase: 8 · Status: accepted
+- Context: The plan leaves open where the AI models live (core may not import diagnostics),
+  how contract excerpts ship, where a `needs_review` check's title and remediation come from,
+  which backends need consent, the fallback reason names and what a dry run prints.
+- Decision:
+  1. **Schema location.** `AIPatch`, `AIExplanation` and `AISuggestion` live in
+     `core/models.py` (ADR-023 item 7 placeholder tightened, additive under ADR-010:
+     `Report.ai_suggestions: list[AISuggestion]`); `diagnostics/schema.py` re-exports them and
+     owns `AIExplanationBatch` plus the `text.format` JSON Schema (`$ref`s inlined, every
+     property required, `additionalProperties: false`; sub-schema [UNVERIFIED], P-07).
+     `AISuggestion` adds `rule_id`, `title`, `severity`, `finding_ids` and `remediation` to
+     plan §21.3 so a fallback entry says which group it covers and carries the deterministic
+     text. Schema regenerated.
+  2. **Contract excerpts** are a Python dict (`diagnostics/contract_excerpts.py`): rows of
+     `docs/BHARATCODE_CONTRACT.md` §15.1 copied verbatim, verified rows prefixed
+     `[VERIFIED]`, rows of the "Not documented" table keeping `**[UNVERIFIED]**`, mapped to
+     rule/check IDs per §15.2. A drift test requires every `(topic, text)` pair on one line of
+     the document. FC-RT-008 and FC-RT-060 have no contract row.
+  3. **`needs_review` remediation source.** The orchestrator (which may import runtime)
+     injects `check_catalogue()` = `{check_id: (title, remediation)}` from
+     `runtime.validators.CHECKS`; without it a check group's title is its ID and remediation
+     is empty. A failed check is explained through its mirrored runtime finding
+     (`Finding.check_ref`); a failed check without one is selected directly.
+  4. **Selection.** Every finding (static, runtime, hypothesis) and every `needs_review`
+     check; groups by rule ID ordered by severity, then instance count, then rule ID; the
+     group's severity is its worst instance. `--max-findings` sets `max_groups` (default 5).
+  5. **Consent per backend.** Consent is asked only when data would leave the process:
+     backend `bharatcode`, a key present, at least one request planned — this includes the
+     key-based default (`llm` unset with `BHARATCODE_API_KEY` exported). `fake` and `none`
+     never ask (nothing is sent; `--yes` is accepted and ignored). `--dry-run` never asks and
+     never sends. A missing consent callback is `ConsentRequiredError` (exit 2); in the CLI a
+     non-interactive session (no TTY on stdin, or `CI=true|1|yes`) without `--yes` exits 2
+     after showing the panel; an interactive "no" is the fallback `consent_declined`, exit 0,
+     and the explained report is still written. The key is checked before consent (no key →
+     `no_key`, never asked); `FLIGHTCHECK_NO_NETWORK` is checked after consent, when the
+     adapter is built (→ `network_disabled`), so the consent path is the same with and without
+     the switch.
+  6. **Fallback reasons:** `no_key`, `llm_none`, `network_disabled`, `consent_declined`,
+     `provider_busy` (503/429 after the adapter's retries), `auth_or_plan` (401/403),
+     `truncated` (incomplete twice, or at the 32 000 cap), `invalid_output` (not a valid
+     batch, or a finish state other than complete), `rejected` (with `rejected_reason`),
+     `missing_explanation`, `call_limit`, `input_too_large`, `timeout`, `connection_error`,
+     `provider_error`, `internal_error` (any unexpected exception in a call). The terminal
+     prints a hint per reason.
+  7. **Retries.** Per call at most one `text.format` retry (a 400, or a local
+     `unsupported_capability` refusal → resend without `text.format`, with the schema spelled
+     out in the instructions, `structured_output="prompt_only"`) and at most one budget retry
+     (`TRUNCATED` → doubled `max_output_tokens`, capped at 32 000; never the same budget).
+     503 retries stay in the adapter's `RetryPolicy`. One surrounding code fence is stripped;
+     prose around JSON fails strict parsing (no repair, P1).
+  8. **Splitting.** Groups are packed greedily into calls of ≤ 24 000 input characters
+     ([ASSUMPTION]); at most `max_calls` (3) calls; a group that alone exceeds the cap is
+     `input_too_large`.
+  9. **Metadata invariant.** The explained report keeps the original `metadata` (command
+     `scan` or `test`, options, timestamps); the AI provenance (`backend`, `model`,
+     `request_id`, `latency_ms`, `structured_output`, `generated_at`) lives in each
+     `AISuggestion`.
+  10. **Sanitisation details.** Snippets are exempt from the 2 000-character string cap; the
+      §19.3 snippet limits apply instead. Dictionary keys `headers`, `request_headers`,
+      `response_headers`, `authorization`, `api_key`, `cookie`, `set-cookie` are dropped from
+      anything sent. Absolute repo paths become relative, the home directory `~`.
+  11. **CLI.** `explain REPORT.json` writes `<report-stem>.explained.json` next to the input
+      unless `--output FILE` (refused if it resolves to the input, or is a directory); the
+      destination is printed on stderr on every run; `--dry-run` prints the exact request
+      bodies (redacted) that `--llm bharatcode` would send, whatever the backend, and writes
+      nothing; zero selectable findings → "Nothing to explain", exit 0, nothing written.
+      `--format html|all` exits 2 until Phase 9. `cli` reaches the diagnostic types through
+      `orchestrator` (`plan_explain`, `run_explain`, `ExplainOptions`, `ConsentInfo`).
+  12. **Phase 1 fix.** `core.redact`'s `key=value` pattern no longer lets a value swallow the
+      backslash of an escaped quote: redacting JSON text holding an already-redacted
+      `api_key=[REDACTED]\"` removed the backslash and broke the JSON (it corrupted the
+      explain payload's `input`). A backslash not followed by a quote is still part of the
+      value.
+- Consequences: Phase 9 renders `ai_suggestions` in HTML. ADR-025 item 5 (an `explain` hint in
+  `scan`/`test` exit lines) is not applied in this phase, so the other commands' output is
+  unchanged; it can be added with Phase 9's CLI work.
