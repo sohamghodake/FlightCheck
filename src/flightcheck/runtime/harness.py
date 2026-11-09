@@ -94,18 +94,27 @@ def build_child_env(
     fake_key: str,
     *,
     guard_port: int | None = None,
+    parent_cwd: Path | None = None,
 ) -> dict[str, str]:
     """The child's whole environment (§20.7): allowlist → overrides → egress guard.
 
     Everything not on the allowlist is dropped (API keys, cloud credentials, tokens, inherited
     proxies in any case). The guard is applied last, so a ``base_url_env``/``api_key_env`` entry
-    cannot switch it off.
+    cannot switch it off. Relative ``PATH`` entries (``PATH=.venv/bin:$PATH``) are made absolute
+    against FlightCheck's own working directory (``parent_cwd``), where the user typed them;
+    the child runs in ``[test].cwd``, where they would point elsewhere.
     """
     env: dict[str, str] = {}
     for name in ENV_ALLOWLIST:
         value = parent_env.get(name)
         if value:
             env[name] = value
+    if "PATH" in env:
+        base = Path.cwd() if parent_cwd is None else parent_cwd
+        env["PATH"] = os.pathsep.join(
+            str(base / entry) if entry and not os.path.isabs(entry) else entry
+            for entry in env["PATH"].split(os.pathsep)
+        )
     env["PYTHONIOENCODING"] = "utf-8"
     for name in test_config.base_url_env:
         env[name] = mock_url

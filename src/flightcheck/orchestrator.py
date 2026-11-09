@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import platform
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -41,7 +42,6 @@ from flightcheck.runtime.harness import (
 from flightcheck.runtime.scenarios import (
     KNOWN_SCENARIO_IDS,
     P1_SCENARIOS,
-    PHASE_7B_SCENARIOS,
     SCENARIOS,
     Scenario,
 )
@@ -125,7 +125,7 @@ def run_scan(request: ScanRequest, config: FlightCheckConfig) -> Report:
     )
 
 
-# --- test (Phase 7A; the CLI command arrives in Phase 7B) -----------------------------------
+# --- test -----------------------------------------------------------------------------------
 
 _log = get_logger("orchestrator")
 _LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "0.0.0.0"})
@@ -189,15 +189,6 @@ def _select_scenarios(ids: Sequence[str]) -> tuple[list[Scenario], list[Diagnost
     for sid in dict.fromkeys(ids):
         if sid in SCENARIOS:
             selected.append(SCENARIOS[sid])
-        elif sid in PHASE_7B_SCENARIOS:
-            notes.append(
-                Diagnostic(
-                    level="info",
-                    code="scenario_not_implemented",
-                    message=f"Scenario {sid} ({PHASE_7B_SCENARIOS[sid]}) arrives in Phase 7B; "
-                    "it was not run.",
-                )
-            )
         else:
             notes.append(
                 Diagnostic(
@@ -285,18 +276,48 @@ def _run_scenario(
     return app_run, exchanges, evaluate(scenario, exchanges, app_run, config)
 
 
-def run_test(
-    request: TestRequest,
-    config: FlightCheckConfig,
-    *,
-    environ: Mapping[str, str] | None = None,
-) -> Report:
-    """Consent → pre-flight → for each selected scenario: fresh mock + fresh child → checks.
+_ENTRY_CANDIDATES = ("app.py", "main.py")
 
-    ``environ`` is the parent environment the child's scrubbed environment is built from
-    (default ``os.environ``). Runs nothing without ``request.allow_exec`` and nothing when the
-    pre-flight finds a hard-coded non-local base URL.
-    """
+
+def ready_test_section(root: Path) -> str:
+    """A ready-to-paste ``[test]`` block for ``flightcheck.toml`` (§23.2)."""
+    entry = next((name for name in _ENTRY_CANDIDATES if (root / name).is_file()), "app.py")
+    return (
+        "[test]\n"
+        f'command = ["python", "{entry}", "What is the weather in Delhi?"]\n'
+        'cwd = "."\n'
+        "timeout_s = 60\n"
+        'base_url_env = ["BHARATCODE_BASE_URL", "OPENAI_BASE_URL"]\n'
+        'api_key_env = ["BHARATCODE_API_KEY", "OPENAI_API_KEY"]'
+    )
+
+
+@dataclass(frozen=True)
+class TestPlan:
+    """What ``run_test`` will run, validated before anything starts (shown in the CLI's
+    execution warning panel, after the pre-flight: §23.2 order)."""
+
+    __test__ = False  # not a pytest test class
+
+    root: Path
+    test: TestConfig
+    scenarios: list[Scenario]
+    notes: list[Diagnostic]
+    cwd: Path
+    index: RepoIndex
+    preflight_refusal: str | None  # set when a hard-coded base URL means nothing will run
+    preflight_path: str | None = None
+
+
+def require_consent(allow_exec: bool, target: str) -> None:
+    """``ConsentRequiredError`` (exit 2) unless ``allow_exec``: the CLI calls this before it
+    even loads the configuration. ``plan_test``/``run_test`` check again."""
+    ensure_consent(allow_exec, target=target)
+
+
+def plan_test(request: TestRequest, config: FlightCheckConfig) -> TestPlan:
+    """Consent → path → ``[test]`` → scenarios → cwd → pre-flight. Starts nothing: the
+    pre-flight only parses the code (scanner index) to find hard-coded base URLs."""
     root = Path(request.root)
     ensure_consent(request.allow_exec, target=str(root))
     if not root.is_dir():
@@ -305,7 +326,7 @@ def run_test(
     if test is None:
         raise ConfigError(
             "No [test] section in flightcheck.toml: FlightCheck does not know how to run the app.",
-            hint='Add [test] with command = ["python", "app.py", "<question>"].',
+            hint="Add this to flightcheck.toml (adjust the command):\n" + ready_test_section(root),
         )
     selected, notes = _select_scenarios(
         request.scenarios if request.scenarios is not None else test.scenarios
@@ -313,9 +334,43 @@ def run_test(
     cwd = resolve_cwd(root, test.cwd)
     if not cwd.is_dir():
         raise ConfigError(f"[test].cwd is not a directory: {test.cwd}")
+    index = build_index(root, DiscoveryOptions.from_config(config.scan))
+    hardcoded = hardcoded_base_urls(index)
+    return TestPlan(
+        root=root,
+        test=test,
+        scenarios=selected,
+        notes=notes,
+        cwd=cwd,
+        index=index,
+        preflight_refusal=_preflight_reason(hardcoded) if hardcoded else None,
+        preflight_path=hardcoded[0].path if hardcoded else None,
+    )
+
+
+def run_test(
+    request: TestRequest,
+    config: FlightCheckConfig,
+    *,
+    environ: Mapping[str, str] | None = None,
+    plan: TestPlan | None = None,
+) -> Report:
+    """Consent → pre-flight → for each selected scenario: fresh mock + fresh child → checks.
+
+    ``environ`` is the parent environment the child's scrubbed environment is built from
+    (default ``os.environ``). ``plan`` is ``plan_test(request, config)`` when the caller
+    already made it (the CLI, to show the warning panel); consent is checked again either way.
+    Runs nothing without ``request.allow_exec`` and nothing when the pre-flight finds a
+    hard-coded non-local base URL.
+    """
+    ensure_consent(request.allow_exec, target=str(request.root))
+    if plan is None:
+        plan = plan_test(request, config)
+    root, test, selected, cwd = plan.root, plan.test, plan.scenarios, plan.cwd
+    notes = list(plan.notes)
+    index = plan.index
 
     mode, declared = _provider_mode(ScanRequest(root=root), config)
-    index = build_index(root, DiscoveryOptions.from_config(config.scan))
     detection = detect(index, declared_provider=declared)
     static_findings = []
     scan_diagnostics: list[Diagnostic] = []
@@ -324,22 +379,21 @@ def run_test(
         static_findings = run_rules(index, ctx)
         scan_diagnostics = ctx.diagnostics
 
-    hardcoded = hardcoded_base_urls(index)
-    if hardcoded:
-        reason = _preflight_reason(hardcoded)
+    reason = plan.preflight_refusal
+    if reason is not None:
         notes.append(
             Diagnostic(
                 level="warning",
                 code="test_preflight_refused",
                 message=reason,
-                path=hardcoded[0].path,
+                path=plan.preflight_path,
             )
         )
     parent_env = os.environ if environ is None else environ
     aliases = _path_aliases(root)
     runs: list[tuple[Scenario, AppRun | None, list[RecordedExchange], list[CheckResult]]] = []
     for scenario in selected:
-        if hardcoded:
+        if reason is not None:
             runs.append((scenario, None, [], skip_all(scenario, reason)))
             continue
         runs.append((scenario, *_run_scenario(scenario, test, cwd, parent_env, aliases)))
@@ -398,4 +452,12 @@ def run_test(
     )
 
 
-__all__ = ["hardcoded_base_urls", "run_scan", "run_test"]
+__all__ = [
+    "TestPlan",
+    "hardcoded_base_urls",
+    "plan_test",
+    "require_consent",
+    "run_scan",
+    "run_test",
+    "ready_test_section",
+]

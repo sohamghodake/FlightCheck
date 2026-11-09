@@ -32,7 +32,7 @@ from flightcheck.runtime.scenarios import (
 REPO = Path(__file__).resolve().parents[2]
 APPS = REPO / "tests" / "fixtures" / "apps"
 EXPECTED = json.loads((REPO / "tests" / "fixtures" / "expected_runtime.json").read_text("utf-8"))
-SCENARIO_IDS = ["S01", "S02", "S04"]
+SCENARIO_IDS = ["S01", "S02", "S03", "S04", "S05", "S06"]
 
 
 def parent_env(**extra: str) -> dict[str, str]:
@@ -75,7 +75,7 @@ def no_execution(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_catalogue_matches_plan_18_3() -> None:
-    assert list(SCENARIOS) == ["S01", "S02", "S04"]
+    assert list(SCENARIOS) == ["S01", "S02", "S03", "S04", "S05", "S06"]  # S03/S05/S06: 7B
     assert S02.check_ids == ("FC-RT-040", "FC-RT-041")
     assert S04.check_ids == ("FC-RT-011", "FC-RT-012", "FC-RT-013", "FC-RT-014")
     assert S01.all_check_ids == ("FC-RT-008", *EVERY_SCENARIO_CHECK_IDS)
@@ -136,12 +136,13 @@ def test_cwd_outside_the_root_is_refused(tmp_path: Path, no_execution: None) -> 
         run(root)
 
 
-def test_phase_7b_and_p1_scenarios_become_diagnostics_not_results(no_execution: None) -> None:
-    report = run(APPS / "bc_good_responses_tools", ["S03", "S05", "S06", "S08"])
+def test_p1_scenarios_become_diagnostics_not_results(no_execution: None) -> None:
+    # S03/S05/S06 became real scenarios in Phase 7B (tests/runtime/test_scenarios_7b.py).
+    report = run(APPS / "bc_good_responses_tools", ["S02b", "S07", "S08", "S09", "S10"])
     assert report.scenarios == []
     notes = [d for d in report.diagnostics if d.code == "scenario_not_implemented"]
-    assert [n.message.split()[1] for n in notes] == ["S03", "S05", "S06", "S08"]
-    assert "Phase 7B" in notes[0].message and "P1" in notes[3].message
+    assert [n.message.split()[1] for n in notes] == ["S02b", "S07", "S08", "S09", "S10"]
+    assert all("P1" in n.message and n.level == "info" for n in notes)
 
 
 def test_hardcoded_base_url_never_runs_and_skips_every_check(no_execution: None) -> None:

@@ -666,3 +666,76 @@ Format:
      "documentation_model"`.
 - Consequences: Phase 7B adds S03/S05/S06, `[test.expect]` and the CLI on top of these rules;
   `tests/fixtures/expected_runtime.json` freezes the S01/S02/S04 picture per fixture app.
+
+## ADR-030 — Runtime expectations, S03/S05/S06 checks and the `test` command (Phase 7B)
+
+- Date: 2026-11-09 · Phase: 7B · Status: accepted
+- Context: §17.2/§17.4 say FC-RT-020/030 depend on `[test.expect]` but leave open what `any`
+  and a timeout mean, how output matching works on a cut excerpt, how a retry after S06 is
+  reported, and §23.2 lists `--config` and `--keep-traffic` without detail. Building the
+  command also exposed two Phase 7A defects.
+- Decision:
+  1. **Expectation model.** `runtime/validators.Expectation` (`kind`, `text`, `raw`) is parsed
+     once per run from core's validated `ExpectConfig` strings (`CheckConfig.expectations`);
+     anything else raises `ValueError` (never guessed). `nonzero_exit`: exit code ≠ 0 (a
+     signal exit counts). `stdout_contains:<t>` / `stderr_contains:<t>`: `<t>` occurs in the
+     captured excerpt, which is redacted, path-aliased and cut to its first 8 KB (ADR-029 item
+     7); not found in an excerpt FlightCheck had to cut → `needs_review` (the rest was not
+     kept). `any`: the developer accepts any handling, so it is met by any finished run,
+     whatever the exit code.
+  2. **What never decides FC-RT-020/030.** A timeout, or FlightCheck stopping the app at
+     `max_requests`, is `needs_review` whatever the expectation (timing alone never fails a
+     check, §27 7B failure point 24). No expectation → `needs_review` with the exit code and
+     the end of stdout/stderr as evidence (ADR-018); "surfaced" is never inferred from output
+     heuristics. The fault step never served (contract 400, no traffic) → `skipped`. A pass
+     carries the fault exchange and the process evidence.
+  3. **FC-RT-030 retries.** Any model request after the failing exchange is a retry; the
+     message adds the SDK attribution (ADR-029 item 3) and "discard any partial output". The
+     result's severity drops to `info` unless it is `failed` (a configured expectation that
+     was not met keeps `medium`). On a non-stream request S06's 500 is retried by the OpenAI
+     SDK (`openai/_base_client.py:959`, status ≥ 500; `DEFAULT_MAX_RETRIES = 2`) and the
+     default step answers, so the app recovers: `needs_review` at `info`, never `passed`
+     without an expectation. On a stream, `response.failed` nests its error under `response`,
+     and the SDK raises only for a top-level `error` (`openai/_streaming.py:95`), so an app
+     that reads only text deltas exits 0 (bc_bad_stream).
+  4. **FC-RT-022/023** are traffic checks. FC-RT-022 fails when a later request carries a tool
+     result (Responses `function_call_output`, Chat `role: "tool"`) for a call_id issued in
+     the `truncated_tool_call` answer; its pass says local execution without a result is not
+     observable; an app without tools → `unsupported`. FC-RT-023 compares `request_sha256` of
+     later requests with S03's or S05's truncated request. The four checks are
+     scenario-specific (not in `EVERY_SCENARIO_CHECK_IDS`; `report_once` leaves them alone).
+     Step IDs: `truncate`/`after_truncate` (S03), `truncated_tool_call`/`answer` (S05),
+     `stream_fail` with `n = 3` (S06).
+  5. **`flightcheck test`.** Order: `--format html|all` / `--config` → exit 2; consent
+     (`orchestrator.require_consent`) before the configuration is even read; `plan_test`
+     (`[test]`, scenario IDs, cwd, then the pre-flight on the scanner index); the warning
+     panel on stderr (command, directory, scenarios, timeout, "your code will run", the
+     egress-guard caveat; "will NOT run" when the pre-flight refuses); then
+     `run_test(..., plan=plan)`, which checks consent again. `--allow-exec` is a flag only
+     (config has no such key). `--timeout` goes through `load_config` overrides (core
+     validates 1–600). `--fail-on` reuses scan's gating on `report.findings` (failed checks
+     are mirrored as runtime findings; `needs_review` never fails; hypotheses are not
+     counted). JSON is always written (ADR-025). Missing `[test]` → exit 2 with a
+     ready-to-paste block (entry guessed from `app.py`/`main.py`). `MockServerError` → exit 3
+     with a `-v` hint. `error` checks are shown once per scenario in the terminal details.
+  6. **Deferred:** `--config FILE` exits 2 (P1): `load_config` takes a project root and core
+     is not changed in this phase.
+  7. **`--keep-traffic`.** The report already embeds every scenario's exchanges (unchanged,
+     ADR-010). The flag also writes `flightcheck-traffic.json` next to it (schema version,
+     root name, per scenario the `AppRun` and exchanges; `redact_obj`, `resolve_inside`), for
+     diffing traffic without findings.
+  8. **Evaluation.** `scripts/eval_fixtures.py --runtime` is the consent to run FlightCheck's
+     own fixture apps through `run_test` (S01–S06, no `[test.expect]`); gates: 100 %
+     `(fixture, scenario, check_id)` agreement with `expected_runtime.json`, and no scenario
+     status or runtime-finding mismatch. CI keeps `--check` only until the CI workflow work
+     in Phase 9. `scan`'s exit line now names `flightcheck test PATH --allow-exec` (ADR-025
+     item 5).
+  9. **Phase 7A fixes.** FC-RT-040/041 attempts end at the first non-503 answer (a request
+     after the recovered 200 is not a retry and has no backoff to judge). `build_child_env`
+     makes relative `PATH` entries absolute against FlightCheck's working directory, so
+     `PATH=.venv/bin:$PATH flightcheck test APP` finds `python` although the child runs in
+     `[test].cwd`.
+- Consequences: FC-RT-020/030 are `needs_review` for every fixture app in
+  `expected_runtime.json` (no expectations there); tests set expectations with
+  `load_config(root, overrides={"test": {"expect": ...}})`. `on_busy_exhausted` is parsed but
+  unused until S02b (P1). The pre-flight index is built once, in `plan_test`.

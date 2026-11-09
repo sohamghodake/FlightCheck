@@ -1,7 +1,7 @@
 """Scenario catalogue (plan §18.3): fault script + the checks each scenario feeds.
 
-Phase 7A implements S01, S02 and S04. S03, S05 and S06 arrive in Phase 7B; S02b and S07–S10 are
-P1. Those IDs are known (so a typo is a ``ConfigError`` but a later scenario is not), and the
+The P0 set is S01–S06 (S01, S02, S04 in Phase 7A; S03, S05, S06 in Phase 7B). S02b and S07–S10
+are P1: those IDs are known (so a typo is a ``ConfigError`` but a later scenario is not), and the
 orchestrator reports them with a ``Diagnostic`` instead of a fake result (ADR-029).
 
 Every ``script_factory`` returns a **new** :class:`FaultScript`: a script keeps a cursor, and a
@@ -31,6 +31,11 @@ EVERY_SCENARIO_CHECK_IDS: tuple[str, ...] = (*CONTRACT_CHECK_IDS, "FC-RT-050", "
 
 BUSY_STEP_PREFIX = "busy_"
 TOOL_STEP_ID = "tool_call"
+TRUNCATE_STEP_ID = "truncate"  # S03: the truncated text answer (FC-RT-020, FC-RT-023)
+TRUNCATED_TOOL_STEP_ID = "truncated_tool_call"  # S05: the cut-off function call (RT-022/023)
+STREAM_FAIL_STEP_ID = "stream_fail"  # S06: the failing stream / HTTP 500 (FC-RT-030)
+TRUNCATION_STEP_IDS: tuple[str, ...] = (TRUNCATE_STEP_ID, TRUNCATED_TOOL_STEP_ID)
+STREAM_FAIL_AFTER_N = 3  # §18.3: STREAM_FAIL_AFTER n=3
 
 
 @dataclass(frozen=True)
@@ -85,6 +90,37 @@ def _s04_script() -> FaultScript:
     )
 
 
+def _s03_script() -> FaultScript:
+    # §18.3: [TRUNCATE] then OK_TEXT, so a retry or follow-up after the truncation is answered.
+    return FaultScript(
+        steps=[
+            _step(TRUNCATE_STEP_ID, MockAction.TRUNCATE, "S03"),
+            _step("after_truncate", MockAction.OK_TEXT, "S03"),
+        ],
+        default_step=_default("S03"),
+    )
+
+
+def _s05_script() -> FaultScript:
+    return FaultScript(
+        steps=[
+            _step(TRUNCATED_TOOL_STEP_ID, MockAction.TRUNCATE_TOOL_CALL, "S05"),
+            _step("answer", MockAction.OK_TEXT, "S05"),
+        ],
+        default_step=_default("S05"),
+    )
+
+
+def _s06_script() -> FaultScript:
+    # §18.3: [STREAM_FAIL_AFTER n=3]; the mock answers a non-stream request with HTTP 500.
+    return FaultScript(
+        steps=[
+            _step(STREAM_FAIL_STEP_ID, MockAction.STREAM_FAIL_AFTER, "S06", n=STREAM_FAIL_AFTER_N)
+        ],
+        default_step=_default("S06"),
+    )
+
+
 S01 = Scenario(
     id="S01",
     name="Baseline",
@@ -109,15 +145,34 @@ S04 = Scenario(
     default_expectations="correct continuation",
     priority="P0",
 )
+S03 = Scenario(
+    id="S03",
+    name="Truncated output",
+    script_factory=_s03_script,
+    check_ids=("FC-RT-020", "FC-RT-023"),
+    default_expectations="expect.on_truncation",
+    priority="P0",
+)
+S05 = Scenario(
+    id="S05",
+    name="Truncated tool call",
+    script_factory=_s05_script,
+    check_ids=("FC-RT-022", "FC-RT-023"),
+    default_expectations="tool not executed",
+    priority="P0",
+)
+S06 = Scenario(
+    id="S06",
+    name="Stream fails mid-way",
+    script_factory=_s06_script,
+    check_ids=("FC-RT-030",),
+    default_expectations="expect.on_stream_failure",
+    priority="P0",
+)
 
-SCENARIOS: dict[str, Scenario] = {s.id: s for s in (S01, S02, S04)}
+SCENARIOS: dict[str, Scenario] = {s.id: s for s in (S01, S02, S03, S04, S05, S06)}
 
-# Known but not implemented in this phase: ID -> (name, when).
-PHASE_7B_SCENARIOS: dict[str, str] = {
-    "S03": "Truncated output",
-    "S05": "Truncated tool call",
-    "S06": "Stream fails mid-way",
-}
+# Known but not implemented (P1): ID -> name.
 P1_SCENARIOS: dict[str, str] = {
     "S02b": "Busy forever",
     "S07": "Invalid key",
@@ -145,10 +200,16 @@ __all__ = [
     "EVERY_SCENARIO_CHECK_IDS",
     "KNOWN_SCENARIO_IDS",
     "P1_SCENARIOS",
-    "PHASE_7B_SCENARIOS",
     "S01",
     "S02",
+    "S03",
     "S04",
+    "S05",
+    "S06",
     "SCENARIOS",
+    "STREAM_FAIL_STEP_ID",
+    "TRUNCATED_TOOL_STEP_ID",
+    "TRUNCATE_STEP_ID",
+    "TRUNCATION_STEP_IDS",
     "Scenario",
 ]

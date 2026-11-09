@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import os
+import shlex
 import traceback
+from collections.abc import Sequence
 from enum import StrEnum
 
 from rich.console import Console
+from rich.panel import Panel
 from rich.text import Text
 
 from flightcheck.core.errors import FlightCheckError
@@ -58,15 +61,58 @@ def exceeds_fail_on(report: Report, fail_on: FailOn, *, include_hypotheses: bool
     )
 
 
-def render_exit_line(console: Console, code: int, fail_on: FailOn, target: str) -> None:
+def render_exit_line(
+    console: Console, code: int, fail_on: FailOn, target: str, *, command: str = "scan"
+) -> None:
     if fail_on is FailOn.NONE:
         reason = "--fail-on none"
     elif code == 1:
         reason = f"findings ≥ {fail_on.value}"
     else:
         reason = f"no findings ≥ {fail_on.value}"
-    hint = f" Next: fix the findings above and re-run flightcheck scan {target}" if code else ""
+    rerun = f"flightcheck {command} {target}" + (" --allow-exec" if command == "test" else "")
+    hints = [f"fix the findings above and re-run {rerun}"] if code else []
+    if command == "scan":  # ADR-025 item 5: hints name only commands that exist
+        hints.append(f"flightcheck test {target} --allow-exec")
+    hint = f" Next: {' · '.join(hints)}" if hints else ""
     console.print(Text(f"Exit {code} ({reason}).{hint}"), soft_wrap=True)
+
+
+def render_exec_warning(
+    console: Console,
+    *,
+    command: Sequence[str],
+    cwd: str,
+    scenarios: Sequence[tuple[str, str]],
+    timeout_s: int,
+    refusal: str | None = None,
+) -> None:
+    """The execution warning panel (§23.2, §27 Phase 7B item 17): always shown before the
+    app runs, after the pre-flight. Everything in it is redacted."""
+    names = ", ".join(f"{sid} {name}" for sid, name in scenarios) or "none"
+    first = (
+        f"Pre-flight refused: {refusal}. The command will NOT run; every check is skipped."
+        if refusal
+        else "Your code will run: FlightCheck starts this command once per scenario."
+    )
+    lines = [
+        first,
+        f"Command:   {shlex.join(command)}",
+        f"Directory: {cwd}",
+        f"Scenarios: {names}",
+        f"Timeout:   {timeout_s} s per scenario",
+        "Model traffic goes to a local mock on 127.0.0.1 with a fake API key. The egress guard "
+        "is best effort, not a sandbox: the command can still read files and open sockets.",
+    ]
+    console.print(
+        Panel(
+            Text(redact("\n".join(lines))),
+            title="Execution warning",
+            title_align="left",
+            border_style="yellow",
+            expand=False,
+        )
+    )
 
 
 def render_error(console: Console, exc: FlightCheckError) -> None:
@@ -93,6 +139,7 @@ __all__ = [
     "exceeds_fail_on",
     "make_console",
     "render_error",
+    "render_exec_warning",
     "render_exit_line",
     "render_internal_error",
 ]

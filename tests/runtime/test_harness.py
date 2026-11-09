@@ -90,7 +90,8 @@ def test_fake_keys_are_fresh_and_marked() -> None:
 
 
 def test_child_env_drops_everything_outside_the_allowlist() -> None:
-    parent = _parent_env(SOME_OTHER="x", PYTHONSTARTUP="/evil.py")
+    absolute_path = os.pathsep.join([str(Path(sys.executable).parent), "/usr/bin", "/bin"])
+    parent = _parent_env(SOME_OTHER="x", PYTHONSTARTUP="/evil.py", PATH=absolute_path)
     env = build_child_env(parent, _config(), "http://127.0.0.1:9/api/model/v1", "fc_fake_key_1")
     for name, value in PLANTED.items():
         if name.upper() in ("HTTP_PROXY",):
@@ -101,6 +102,19 @@ def test_child_env_drops_everything_outside_the_allowlist() -> None:
     assert env["PATH"] == parent["PATH"] and env["HOME"] == parent["HOME"]
     assert env["PYTHONIOENCODING"] == "utf-8"
     assert "PYTHONPATH" not in env
+
+
+def test_child_env_makes_relative_path_entries_absolute(tmp_path: Path) -> None:
+    """Phase 7B fix: `PATH=.venv/bin:$PATH flightcheck test APP` names .venv/bin relative to
+    where the user ran FlightCheck, not to [test].cwd, where the child starts."""
+    parent = _parent_env(PATH=os.pathsep.join([".venv/bin", "/usr/bin", "", "bin"]))
+    env = build_child_env(parent, _config(), "http://u", "k", parent_cwd=tmp_path)
+    assert env["PATH"].split(os.pathsep) == [
+        str(tmp_path / ".venv/bin"),
+        "/usr/bin",
+        "",
+        str(tmp_path / "bin"),
+    ]
 
 
 def test_child_env_sets_overrides_for_every_listed_variable() -> None:

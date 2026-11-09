@@ -1,4 +1,4 @@
-"""Terminal rendering of a scan report with Rich (plan §23.3, §24).
+"""Terminal rendering of scan and test reports with Rich (plan §23.2, §23.3, §24).
 
 All text is passed as ``rich.text.Text`` (never as markup), so ``[UNVERIFIED]`` and source
 excerpts are printed literally. Every string from the report is redacted again here.
@@ -14,7 +14,17 @@ from rich.table import Table
 from rich.text import Text
 
 from flightcheck import __version__
-from flightcheck.core.models import Finding, FindingKind, ProviderDetection, Report, Severity
+from flightcheck.core.models import (
+    CheckResult,
+    CheckStatus,
+    Evidence,
+    Finding,
+    FindingKind,
+    ProviderDetection,
+    Report,
+    ScenarioResult,
+    Severity,
+)
 from flightcheck.core.redact import redact
 
 SEVERITY_STYLES = {
@@ -104,12 +114,150 @@ def render_summary(console: Console, report: Report, report_path: str | None) ->
         head = f"{count} {noun} ({severity_counts(report.findings)})"
     else:
         head = "No findings"
-    checks = sum(len(s.checks) for s in report.scenarios)
-    parts = [head, f"{checks} runtime checks"]
+    checks = [c for s in report.scenarios for c in s.checks]
+    counts = Counter(c.status for c in checks)
+    detail = ", ".join(
+        f"{counts[status]} {_STATUS_LABELS[status]}"
+        for status in (CheckStatus.FAILED, CheckStatus.NEEDS_REVIEW)
+        if counts[status]
+    )
+    parts = [head, f"{len(checks)} runtime checks" + (f" ({detail})" if detail else "")]
     if report_path:
         parts.append(f"report: {report_path}")
     console.print()
     console.print(Text(redact(" · ".join(parts))), soft_wrap=True)
+
+
+_STATUS_LABELS = {
+    CheckStatus.PASSED: "passed",
+    CheckStatus.FAILED: "failed",
+    CheckStatus.NEEDS_REVIEW: "needs review",
+    CheckStatus.SKIPPED: "skipped",
+    CheckStatus.UNSUPPORTED: "unsupported",
+    CheckStatus.ERROR: "error",
+}
+STATUS_STYLES = {
+    CheckStatus.PASSED: "green",
+    CheckStatus.FAILED: "bold red",
+    CheckStatus.NEEDS_REVIEW: "yellow",
+    CheckStatus.SKIPPED: "dim",
+    CheckStatus.UNSUPPORTED: "dim",
+    CheckStatus.ERROR: "red",
+}
+_COUNT_COLUMNS = (
+    CheckStatus.PASSED,
+    CheckStatus.FAILED,
+    CheckStatus.NEEDS_REVIEW,
+    CheckStatus.SKIPPED,
+    CheckStatus.UNSUPPORTED,
+)
+
+
+def _app_exit(result: ScenarioResult) -> str:
+    run = result.app_run
+    if run is None:
+        return "not run"
+    if run.timed_out:
+        return "timeout"
+    return f"exit {run.exit_code}"
+
+
+def render_scenario_table(console: Console, report: Report) -> None:
+    """One row per scenario: app exit, requests seen and check counts per status (§23.2)."""
+    show_error = any(c.status is CheckStatus.ERROR for s in report.scenarios for c in s.checks)
+    columns = (*_COUNT_COLUMNS, CheckStatus.ERROR) if show_error else _COUNT_COLUMNS
+    table = Table(box=None, padding=(0, 1), pad_edge=True, expand=False, header_style="bold")
+    table.add_column("scenario", no_wrap=True)
+    table.add_column("name", overflow="fold")
+    table.add_column("status", no_wrap=True)
+    table.add_column("app", no_wrap=True)
+    table.add_column("requests", no_wrap=True, justify="right")
+    for status in columns:
+        table.add_column(_STATUS_LABELS[status], no_wrap=True, justify="right")
+    for result in report.scenarios:
+        counts = Counter(c.status for c in result.checks)
+        table.add_row(
+            Text(result.scenario_id),
+            Text(result.name),
+            Text(_STATUS_LABELS[result.status], style=STATUS_STYLES[result.status]),
+            Text(_app_exit(result)),
+            Text(str(len(result.exchanges))),
+            *[
+                Text(str(counts[s]), style=STATUS_STYLES[s] if counts[s] else "dim")
+                for s in columns
+            ],
+        )
+    console.print()
+    console.print(Text(" Scenarios", style="bold"))
+    console.print(table)
+
+
+def _one_line(text: str) -> str:
+    return " ⏎ ".join(part.strip() for part in text.strip().splitlines() if part.strip())
+
+
+def _evidence_line(item: Evidence) -> Text:
+    label = item.type if item.exchange_seq is None else f"{item.type} #{item.exchange_seq}"
+    body = _one_line(item.excerpt)
+    if item.note:
+        body = f"{body} ({item.note})" if body else item.note
+    return Text("      ") + Text(f"{label}: ", style="dim") + Text(redact(body))
+
+
+def _render_check(console: Console, check: CheckResult) -> None:
+    head = Text(" ") + Text(
+        f"{_STATUS_LABELS[check.status].upper():<12}", style=STATUS_STYLES[check.status]
+    )
+    head += Text(f" {check.severity.value.upper():<8}", style=SEVERITY_STYLES[check.severity])
+    head += Text(f" {check.check_id} [{check.scenario_id}] ") + Text(redact(check.message))
+    console.print(head)
+    if check.expected or check.observed:
+        console.print(
+            Text("      ")
+            + Text(redact(f"expected: {check.expected or '—'} · observed: {check.observed or '—'}"))
+        )
+    for item in check.evidence:
+        console.print(_evidence_line(item))
+
+
+def render_check_details(console: Console, report: Report) -> None:
+    """Errors (FlightCheck could not run the check), failed checks, then needs_review, each
+    with its traffic/process excerpts. An error repeated across a scenario's checks (the app
+    could not start) is shown once per scenario."""
+    errors: dict[tuple[str, str], CheckResult] = {}
+    for result in report.scenarios:
+        for check in result.checks:
+            if check.status is CheckStatus.ERROR:
+                errors.setdefault((check.scenario_id, check.message), check)
+    if errors:
+        console.print()
+        console.print(Text(" Errors", style="bold"))
+        for check in errors.values():
+            console.print(
+                Text(" ")
+                + Text("ERROR".ljust(12), style=STATUS_STYLES[CheckStatus.ERROR])
+                + Text(f" [{check.scenario_id}] ")
+                + Text(redact(check.message))
+            )
+    for status in (CheckStatus.FAILED, CheckStatus.NEEDS_REVIEW):
+        checks = [c for s in report.scenarios for c in s.checks if c.status is status]
+        if not checks:
+            continue
+        console.print()
+        console.print(Text(f" {_STATUS_LABELS[status].capitalize()} checks", style="bold"))
+        for check in checks:
+            _render_check(console, check)
+
+
+def render_test(console: Console, report: Report, *, target: str, report_path: str | None) -> None:
+    """Header, static findings (when the scan ran), the scenario table, failed and
+    needs_review details with excerpts, diagnostics and the summary line."""
+    render_header(console, report, target)
+    render_findings(console, [f for f in report.findings if f.kind is not FindingKind.RUNTIME])
+    render_scenario_table(console, report)
+    render_check_details(console, report)
+    render_diagnostics(console, report)
+    render_summary(console, report, report_path)
 
 
 def render_scan(console: Console, report: Report, *, target: str, report_path: str | None) -> None:
@@ -120,4 +268,4 @@ def render_scan(console: Console, report: Report, *, target: str, report_path: s
     render_summary(console, report, report_path)
 
 
-__all__ = ["render_scan", "severity_counts"]
+__all__ = ["render_scan", "render_test", "severity_counts"]

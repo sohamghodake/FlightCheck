@@ -1,10 +1,13 @@
 {
-  "_comment": "Runtime expectations per fixture app (plan §25.1, §27 Phase 7A item 14) for scenarios S01, S02, S04 against the mock. Asserted by tests/runtime/test_scenarios_7a.py. Contract checks FC-RT-001…007 and FC-RT-050/060 are reported once per run (ADR-029), so they appear under the first scenario only. S03/S05/S06 entries arrive in Phase 7B.",
+  "_comment": "Runtime expectations per fixture app (plan §25.1, §27 Phase 7A/7B item 14) for scenarios S01–S06 against the mock, with no [test.expect] (so FC-RT-020/030 are needs_review unless a check is skipped). Asserted by tests/runtime/test_scenarios_7a.py and scripts/eval_fixtures.py --runtime. Contract checks FC-RT-001…007 and FC-RT-050/060 are reported once per run (ADR-029), so they appear under the first scenario only.",
   "root": "tests/fixtures/apps",
   "scenarios": [
     "S01",
     "S02",
-    "S04"
+    "S03",
+    "S04",
+    "S05",
+    "S06"
   ],
   "apps": {
     "bc_bad_budget_model": {
@@ -30,6 +33,13 @@
           "FC-RT-041": "needs_review"
         }
       },
+      "S03": {
+        "status": "needs_review",
+        "checks": {
+          "FC-RT-020": "needs_review",
+          "FC-RT-023": "passed"
+        }
+      },
       "S04": {
         "status": "unsupported",
         "checks": {
@@ -37,6 +47,19 @@
           "FC-RT-012": "unsupported",
           "FC-RT-013": "unsupported",
           "FC-RT-014": "unsupported"
+        }
+      },
+      "S05": {
+        "status": "passed",
+        "checks": {
+          "FC-RT-022": "unsupported",
+          "FC-RT-023": "passed"
+        }
+      },
+      "S06": {
+        "status": "needs_review",
+        "checks": {
+          "FC-RT-030": "needs_review"
         }
       },
       "runtime_findings": [
@@ -67,6 +90,13 @@
           "FC-RT-041": "skipped"
         }
       },
+      "S03": {
+        "status": "skipped",
+        "checks": {
+          "FC-RT-020": "skipped",
+          "FC-RT-023": "skipped"
+        }
+      },
       "S04": {
         "status": "skipped",
         "checks": {
@@ -74,6 +104,19 @@
           "FC-RT-012": "skipped",
           "FC-RT-013": "skipped",
           "FC-RT-014": "skipped"
+        }
+      },
+      "S05": {
+        "status": "skipped",
+        "checks": {
+          "FC-RT-022": "skipped",
+          "FC-RT-023": "skipped"
+        }
+      },
+      "S06": {
+        "status": "skipped",
+        "checks": {
+          "FC-RT-030": "skipped"
         }
       },
       "runtime_findings": []
@@ -101,6 +144,13 @@
           "FC-RT-041": "skipped"
         }
       },
+      "S03": {
+        "status": "skipped",
+        "checks": {
+          "FC-RT-020": "skipped",
+          "FC-RT-023": "skipped"
+        }
+      },
       "S04": {
         "status": "skipped",
         "checks": {
@@ -108,6 +158,19 @@
           "FC-RT-012": "skipped",
           "FC-RT-013": "skipped",
           "FC-RT-014": "skipped"
+        }
+      },
+      "S05": {
+        "status": "skipped",
+        "checks": {
+          "FC-RT-022": "skipped",
+          "FC-RT-023": "skipped"
+        }
+      },
+      "S06": {
+        "status": "skipped",
+        "checks": {
+          "FC-RT-030": "skipped"
         }
       },
       "runtime_findings": [
@@ -138,6 +201,13 @@
           "FC-RT-041": "skipped"
         }
       },
+      "S03": {
+        "status": "needs_review",
+        "checks": {
+          "FC-RT-020": "needs_review",
+          "FC-RT-023": "passed"
+        }
+      },
       "S04": {
         "status": "unsupported",
         "checks": {
@@ -145,6 +215,19 @@
           "FC-RT-012": "unsupported",
           "FC-RT-013": "unsupported",
           "FC-RT-014": "unsupported"
+        }
+      },
+      "S05": {
+        "status": "passed",
+        "checks": {
+          "FC-RT-022": "unsupported",
+          "FC-RT-023": "passed"
+        }
+      },
+      "S06": {
+        "status": "needs_review",
+        "checks": {
+          "FC-RT-030": "needs_review"
         }
       },
       "runtime_findings": [
@@ -174,6 +257,13 @@
           "FC-RT-041": "needs_review"
         }
       },
+      "S03": {
+        "status": "needs_review",
+        "checks": {
+          "FC-RT-020": "needs_review",
+          "FC-RT-023": "passed"
+        }
+      },
       "S04": {
         "status": "unsupported",
         "checks": {
@@ -181,6 +271,19 @@
           "FC-RT-012": "unsupported",
           "FC-RT-013": "unsupported",
           "FC-RT-014": "unsupported"
+        }
+      },
+      "S05": {
+        "status": "passed",
+        "checks": {
+          "FC-RT-022": "unsupported",
+          "FC-RT-023": "passed"
+        }
+      },
+      "S06": {
+        "status": "needs_review",
+        "checks": {
+          "FC-RT-030": "needs_review"
         }
       },
       "runtime_findings": [
@@ -210,6 +313,13 @@
           "FC-RT-041": "skipped"
         }
       },
+      "S03": {
+        "status": "skipped",
+        "checks": {
+          "FC-RT-020": "skipped",
+          "FC-RT-023": "skipped"
+        }
+      },
       "S04": {
         "status": "skipped",
         "checks": {
@@ -217,6 +327,19 @@
           "FC-RT-012": "skipped",
           "FC-RT-013": "skipped",
           "FC-RT-014": "skipped"
+        }
+      },
+      "S05": {
+        "status": "skipped",
+        "checks": {
+          "FC-RT-022": "skipped",
+          "FC-RT-023": "skipped"
+        }
+      },
+      "S06": {
+        "status": "skipped",
+        "checks": {
+          "FC-RT-030": "skipped"
         }
       },
       "runtime_findings": [
@@ -247,6 +370,13 @@
           "FC-RT-041": "needs_review"
         }
       },
+      "S03": {
+        "status": "needs_review",
+        "checks": {
+          "FC-RT-020": "needs_review",
+          "FC-RT-023": "passed"
+        }
+      },
       "S04": {
         "status": "unsupported",
         "checks": {
@@ -254,6 +384,19 @@
           "FC-RT-012": "unsupported",
           "FC-RT-013": "unsupported",
           "FC-RT-014": "unsupported"
+        }
+      },
+      "S05": {
+        "status": "passed",
+        "checks": {
+          "FC-RT-022": "unsupported",
+          "FC-RT-023": "passed"
+        }
+      },
+      "S06": {
+        "status": "needs_review",
+        "checks": {
+          "FC-RT-030": "needs_review"
         }
       },
       "runtime_findings": []
@@ -281,6 +424,13 @@
           "FC-RT-041": "needs_review"
         }
       },
+      "S03": {
+        "status": "needs_review",
+        "checks": {
+          "FC-RT-020": "needs_review",
+          "FC-RT-023": "passed"
+        }
+      },
       "S04": {
         "status": "failed",
         "checks": {
@@ -288,6 +438,19 @@
           "FC-RT-012": "failed",
           "FC-RT-013": "failed",
           "FC-RT-014": "passed"
+        }
+      },
+      "S05": {
+        "status": "passed",
+        "checks": {
+          "FC-RT-022": "passed",
+          "FC-RT-023": "passed"
+        }
+      },
+      "S06": {
+        "status": "needs_review",
+        "checks": {
+          "FC-RT-030": "needs_review"
         }
       },
       "runtime_findings": [
@@ -318,16 +481,39 @@
           "FC-RT-041": "needs_review"
         }
       },
-      "S04": {
-        "status": "unsupported",
+      "S03": {
+        "status": "failed",
         "checks": {
-          "FC-RT-011": "unsupported",
-          "FC-RT-012": "unsupported",
-          "FC-RT-013": "unsupported",
-          "FC-RT-014": "unsupported"
+          "FC-RT-020": "needs_review",
+          "FC-RT-023": "failed"
         }
       },
-      "runtime_findings": []
+      "S04": {
+        "status": "passed",
+        "checks": {
+          "FC-RT-011": "passed",
+          "FC-RT-012": "passed",
+          "FC-RT-013": "passed",
+          "FC-RT-014": "passed"
+        }
+      },
+      "S05": {
+        "status": "failed",
+        "checks": {
+          "FC-RT-022": "failed",
+          "FC-RT-023": "passed"
+        }
+      },
+      "S06": {
+        "status": "needs_review",
+        "checks": {
+          "FC-RT-030": "needs_review"
+        }
+      },
+      "runtime_findings": [
+        "FC-RT-022",
+        "FC-RT-023"
+      ]
     },
     "bc_good_chat_stream": {
       "S01": {
@@ -352,6 +538,13 @@
           "FC-RT-041": "needs_review"
         }
       },
+      "S03": {
+        "status": "needs_review",
+        "checks": {
+          "FC-RT-020": "needs_review",
+          "FC-RT-023": "passed"
+        }
+      },
       "S04": {
         "status": "passed",
         "checks": {
@@ -359,6 +552,19 @@
           "FC-RT-012": "passed",
           "FC-RT-013": "passed",
           "FC-RT-014": "passed"
+        }
+      },
+      "S05": {
+        "status": "passed",
+        "checks": {
+          "FC-RT-022": "passed",
+          "FC-RT-023": "passed"
+        }
+      },
+      "S06": {
+        "status": "needs_review",
+        "checks": {
+          "FC-RT-030": "needs_review"
         }
       },
       "runtime_findings": []
@@ -386,6 +592,13 @@
           "FC-RT-041": "needs_review"
         }
       },
+      "S03": {
+        "status": "needs_review",
+        "checks": {
+          "FC-RT-020": "needs_review",
+          "FC-RT-023": "passed"
+        }
+      },
       "S04": {
         "status": "passed",
         "checks": {
@@ -393,6 +606,19 @@
           "FC-RT-012": "passed",
           "FC-RT-013": "passed",
           "FC-RT-014": "passed"
+        }
+      },
+      "S05": {
+        "status": "passed",
+        "checks": {
+          "FC-RT-022": "passed",
+          "FC-RT-023": "passed"
+        }
+      },
+      "S06": {
+        "status": "needs_review",
+        "checks": {
+          "FC-RT-030": "needs_review"
         }
       },
       "runtime_findings": []
@@ -420,6 +646,13 @@
           "FC-RT-041": "needs_review"
         }
       },
+      "S03": {
+        "status": "needs_review",
+        "checks": {
+          "FC-RT-020": "needs_review",
+          "FC-RT-023": "passed"
+        }
+      },
       "S04": {
         "status": "unsupported",
         "checks": {
@@ -427,6 +660,19 @@
           "FC-RT-012": "unsupported",
           "FC-RT-013": "unsupported",
           "FC-RT-014": "unsupported"
+        }
+      },
+      "S05": {
+        "status": "passed",
+        "checks": {
+          "FC-RT-022": "unsupported",
+          "FC-RT-023": "passed"
+        }
+      },
+      "S06": {
+        "status": "needs_review",
+        "checks": {
+          "FC-RT-030": "needs_review"
         }
       },
       "runtime_findings": []
@@ -454,6 +700,13 @@
           "FC-RT-041": "needs_review"
         }
       },
+      "S03": {
+        "status": "needs_review",
+        "checks": {
+          "FC-RT-020": "needs_review",
+          "FC-RT-023": "passed"
+        }
+      },
       "S04": {
         "status": "unsupported",
         "checks": {
@@ -461,6 +714,19 @@
           "FC-RT-012": "unsupported",
           "FC-RT-013": "unsupported",
           "FC-RT-014": "unsupported"
+        }
+      },
+      "S05": {
+        "status": "passed",
+        "checks": {
+          "FC-RT-022": "unsupported",
+          "FC-RT-023": "passed"
+        }
+      },
+      "S06": {
+        "status": "needs_review",
+        "checks": {
+          "FC-RT-030": "needs_review"
         }
       },
       "runtime_findings": [

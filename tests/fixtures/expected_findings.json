@@ -913,7 +913,7 @@
           "main.py": [
             {
               "rule_id": "FC-GEN-002",
-              "line": 24,
+              "line": 55,
               "severity": "medium",
               "confidence": "medium",
               "kind": "static"

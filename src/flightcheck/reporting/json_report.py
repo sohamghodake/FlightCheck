@@ -48,6 +48,33 @@ def write_report(report: Report, out_dir: str | os.PathLike[str]) -> Path:
     return target
 
 
+TRAFFIC_FILENAME = "flightcheck-traffic.json"
+
+
+def write_traffic(report: Report, out_dir: str | os.PathLike[str]) -> Path:
+    """``--keep-traffic``: every scenario's process result and recorded exchanges in one
+    redacted file next to the report (ADR-030), for diffing traffic without the findings."""
+    directory = Path(out_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    data = {
+        "schema_version": SCHEMA_VERSION,
+        "root_name": report.repo.root_name if report.repo else None,
+        "scenarios": [
+            {
+                "scenario_id": s.scenario_id,
+                "name": s.name,
+                "app_run": s.app_run.model_dump(mode="json") if s.app_run else None,
+                "exchanges": [e.model_dump(mode="json") for e in s.exchanges],
+            }
+            for s in report.scenarios
+        ],
+    }
+    target = resolve_inside(directory, TRAFFIC_FILENAME)
+    text = json.dumps(redact_obj(data), indent=2, ensure_ascii=False) + "\n"
+    target.write_text(text, encoding="utf-8")
+    return target
+
+
 def read_report(path: str | os.PathLike[str]) -> Report:
     """Load a saved report. Unknown schema majors and invalid files → :class:`ConfigError`."""
     source = Path(path)

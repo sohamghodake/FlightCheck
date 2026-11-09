@@ -12,7 +12,10 @@ Status rules (ADR-018, plan §21.2, §20.14):
 - No recorded traffic → every traffic check is ``skipped`` with the §17.2 reason.
 - An incomplete recording (``TrafficRecorder.complete`` is false) cannot confirm an absence:
   a would-be ``passed`` becomes ``needs_review``; an observed failure stays ``failed``.
-- An app with no tools under S04 → the tool checks are ``unsupported``.
+- An app with no tools under S04/S05 → the tool checks are ``unsupported``.
+- FC-RT-020/030 (S03/S06) judge the process outcome only against an explicit ``[test.expect]``
+  value, parsed once into :class:`Expectation` (ADR-030); without one they are
+  ``needs_review``, and a timeout never decides them. FC-RT-022/023 are traffic checks.
 
 The documented 400s come from ``core.contract.responses_contract_violations`` (shared with the
 mock and the adapter), the limits from ``core.config``; nothing here re-implements them.
@@ -22,7 +25,8 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from enum import StrEnum
 from functools import wraps
 from typing import Any
 
@@ -30,6 +34,7 @@ from flightcheck.core.config import (
     BHARATCODE_DOCUMENTED_MODELS,
     BHARATCODE_PRO_ONLY_MODEL,
     MAX_OUTPUT_TOKENS_CAP,
+    ExpectConfig,
     TestConfig,
 )
 from flightcheck.core.contract import responses_contract_violations
@@ -46,10 +51,15 @@ from flightcheck.core.models import (
     Severity,
     Verification,
 )
+from flightcheck.runtime.harness import TRUNCATION_MARK
 from flightcheck.runtime.scenarios import (
     BUSY_STEP_PREFIX,
     EVERY_SCENARIO_CHECK_IDS,
+    STREAM_FAIL_STEP_ID,
     TOOL_STEP_ID,
+    TRUNCATE_STEP_ID,
+    TRUNCATED_TOOL_STEP_ID,
+    TRUNCATION_STEP_IDS,
     Scenario,
 )
 
@@ -77,6 +87,61 @@ class CheckMeta:
     remediation: str
 
 
+class ExpectKind(StrEnum):
+    NONZERO_EXIT = "nonzero_exit"
+    STDOUT_CONTAINS = "stdout_contains"
+    STDERR_CONTAINS = "stderr_contains"
+    ANY = "any"
+
+
+@dataclass(frozen=True)
+class Expectation:
+    """One ``[test.expect]`` value parsed once (ADR-030). ``raw`` is the configured string."""
+
+    kind: ExpectKind
+    text: str = ""
+    raw: str = ""
+
+    @classmethod
+    def parse(cls, raw: str) -> Expectation:
+        """``nonzero_exit`` | ``any`` | ``stdout_contains:<text>`` | ``stderr_contains:<text>``.
+
+        core's ``_EXPECT_PATTERN`` already validated config values; this raises ``ValueError``
+        for anything else, so a value that bypassed config is never guessed at.
+        """
+        if raw in (ExpectKind.NONZERO_EXIT.value, ExpectKind.ANY.value):
+            return cls(ExpectKind(raw), raw=raw)
+        for kind in (ExpectKind.STDOUT_CONTAINS, ExpectKind.STDERR_CONTAINS):
+            prefix = f"{kind.value}:"
+            if raw.startswith(prefix) and len(raw) > len(prefix):
+                return cls(kind, text=raw[len(prefix) :], raw=raw)
+        raise ValueError(
+            f"invalid expectation {raw!r}: use nonzero_exit, any, stdout_contains:<text> or "
+            "stderr_contains:<text>"
+        )
+
+
+@dataclass(frozen=True)
+class Expectations:
+    on_truncation: Expectation | None = None
+    on_stream_failure: Expectation | None = None
+    on_busy_exhausted: Expectation | None = None  # S02b (P1); parsed, not used yet
+
+    @classmethod
+    def from_config(cls, expect: ExpectConfig | None) -> Expectations:
+        if expect is None:
+            return cls()
+
+        def one(raw: str | None) -> Expectation | None:
+            return None if raw is None else Expectation.parse(raw)
+
+        return cls(
+            on_truncation=one(expect.on_truncation),
+            on_stream_failure=one(expect.on_stream_failure),
+            on_busy_exhausted=one(expect.on_busy_exhausted),
+        )
+
+
 @dataclass(frozen=True)
 class CheckConfig:
     """What a validator may know besides the traffic and the process result."""
@@ -85,6 +150,10 @@ class CheckConfig:
     recording_complete: bool = True
     missing_records: int = 0  # TrafficRecorder.dropped + record_failures
     aborted_for_limit: bool = False  # FlightCheck stopped the app after max_requests
+    expectations: Expectations = field(init=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "expectations", Expectations.from_config(self.test.expect))
 
 
 Validator = Callable[
@@ -173,6 +242,37 @@ CHECKS: dict[str, CheckMeta] = {
             "In the follow-up, send the original input plus the response's output items "
             "(including the function_call) before the function_call_output, and resend the "
             "tool definitions you still need.",
+        ),
+        CheckMeta(
+            "FC-RT-020",
+            "Truncation surfaced",
+            Severity.MEDIUM,
+            'Check status == "incomplete" (Chat: finish_reason == "length"), keep the partial '
+            "output and surface the truncation (for example exit non-zero); set [test.expect] "
+            "on_truncation so FlightCheck can verify it.",
+        ),
+        CheckMeta(
+            "FC-RT-022",
+            "Incomplete tool call not executed",
+            Severity.HIGH,
+            'Do not run a function call from a truncated response (status "incomplete" / '
+            'finish_reason "length"): its arguments may be cut off. Raise the output budget '
+            "or ask again instead.",
+        ),
+        CheckMeta(
+            "FC-RT-023",
+            "No identical retry after truncation",
+            Severity.MEDIUM,
+            "Do not resend the same request after a truncation (the same budget runs out "
+            "again): raise max_output_tokens, shorten the input or ask for a shorter answer.",
+        ),
+        CheckMeta(
+            "FC-RT-030",
+            "Stream failure surfaced",
+            Severity.MEDIUM,
+            "Treat response.failed, an error event or a stream that ends without a terminal "
+            "event as a failure: discard the partial output, then surface the error or retry; "
+            "set [test.expect] on_stream_failure so FlightCheck can verify it.",
         ),
         CheckMeta(
             "FC-RT-040",
@@ -1141,7 +1241,14 @@ def _busy_attempts(
             f"no request reached the busy (503) step (the first model request got HTTP "
             f"{first.response_status} from '{first.step_id}')",
         )
-    return [e for e in model if e.seq >= busy[0].seq], None
+    # The attempts end at the first answer that is not a 503: a request sent after the app got
+    # its answer (a follow-up, a second question) is not a retry of the busy error.
+    attempts: list[RecordedExchange] = []
+    for exchange in (e for e in model if e.seq >= busy[0].seq):
+        attempts.append(exchange)
+        if exchange.response_status != 503:
+            break
+    return attempts, None
 
 
 def _sdk_note(retries: Sequence[RecordedExchange]) -> str:
@@ -1343,6 +1450,359 @@ def check_rt060(
     )
 
 
+# --- FC-RT-020/022/023/030: truncation and stream failure (S03, S05, S06) --------------------
+
+
+def _fault_exchange(
+    exchanges: Sequence[RecordedExchange], step_ids: Sequence[str]
+) -> RecordedExchange | None:
+    """The first model request the scenario's fault step answered."""
+    return next((e for e in model_exchanges(exchanges) if e.step_id in step_ids), None)
+
+
+def _not_served(
+    check_id: str, exchanges: Sequence[RecordedExchange], scenario: Scenario, what: str
+) -> CheckResult:
+    model = model_exchanges(exchanges)
+    if not model:
+        return skipped(
+            check_id, scenario, "no /responses or /chat/completions request was observed"
+        )
+    first = model[0]
+    return skipped(
+        check_id,
+        scenario,
+        f"the mock's {what} step was never served (the first model request got HTTP "
+        f"{first.response_status} from '{first.step_id}')",
+    )
+
+
+def _truncation(
+    check_id: str,
+    exchanges: Sequence[RecordedExchange],
+    scenario: Scenario,
+    step_ids: Sequence[str],
+) -> tuple[RecordedExchange | None, CheckResult | None]:
+    """The truncated answer the app received, or the skipped result when there is none."""
+    fault = _fault_exchange(exchanges, step_ids)
+    if fault is None:
+        return None, _not_served(check_id, exchanges, scenario, "truncation")
+    finish = fault.response_summary.get("finish")
+    if fault.response_status != 200 or finish not in ("truncated", "truncated_tool_call"):
+        return None, skipped(
+            check_id,
+            scenario,
+            f"the truncated answer did not reach the app (HTTP {fault.response_status}, "
+            f"finish={_short(finish)})",
+        )
+    return fault, None
+
+
+def _tail(text: str) -> str:
+    text = text.strip()
+    return text if len(text) <= _EXCERPT_CHARS else "…" + text[-(_EXCERPT_CHARS - 1) :]
+
+
+def _process_evidence(app_run: AppRun) -> list[Evidence]:
+    """Exit status plus the end of each non-empty output stream (already redacted)."""
+    exit_note = f"{_exit_text(app_run)} after {app_run.duration_ms} ms"
+    shown = [
+        Evidence(type="process", excerpt=_tail(text), note=f"{name}; {exit_note}")
+        for name, text in (("stdout", app_run.stdout_excerpt), ("stderr", app_run.stderr_excerpt))
+        if text.strip()
+    ]
+    return shown or [Evidence(type="process", note=f"{exit_note}; no output")]
+
+
+def expectation_met(expectation: Expectation, app_run: AppRun) -> bool | None:
+    """``True``/``False`` when the finished run shows it; ``None`` when it cannot be judged:
+    the app timed out (ADR-030: timing alone never fails a check), or the text was not found
+    in an output excerpt FlightCheck had to cut (the rest was not kept)."""
+    if app_run.timed_out or app_run.exit_code is None:
+        return None
+    if expectation.kind is ExpectKind.ANY:
+        return True
+    if expectation.kind is ExpectKind.NONZERO_EXIT:
+        return app_run.exit_code != 0
+    stream = (
+        app_run.stdout_excerpt
+        if expectation.kind is ExpectKind.STDOUT_CONTAINS
+        else app_run.stderr_excerpt
+    )
+    if expectation.text in stream:
+        return True
+    return None if stream.endswith(TRUNCATION_MARK) else False
+
+
+def _surfaced(
+    check_id: str,
+    scenario: Scenario,
+    app_run: AppRun | None,
+    config: CheckConfig,
+    expectation: Expectation | None,
+    key: str,
+    fault: RecordedExchange,
+    fault_text: str,
+) -> CheckResult:
+    """FC-RT-020/030: judge the process outcome only against an explicit expectation."""
+    if app_run is None:
+        return skipped(check_id, scenario, "the app did not run")
+    fault_ev = _traffic_evidence(fault, note=f"scripted fault ({fault.step_id})")
+    evidence = [fault_ev, *_process_evidence(app_run)]
+    observed = "timed out" if app_run.timed_out else f"exit {app_run.exit_code}"
+    if config.aborted_for_limit:
+        return _result(
+            check_id,
+            scenario,
+            CheckStatus.NEEDS_REVIEW,
+            f"After {fault_text} (seq {fault.seq}) the app sent more than "
+            f"{config.test.max_requests} requests and FlightCheck stopped it, so its handling "
+            "cannot be judged (see FC-RT-060).",
+            expected=expectation.raw if expectation else None,
+            observed="stopped by FlightCheck",
+            evidence=evidence,
+        )
+    if expectation is None:
+        return _result(
+            check_id,
+            scenario,
+            CheckStatus.NEEDS_REVIEW,
+            f"The mock returned {fault_text} (seq {fault.seq}) and the app finished with "
+            f"{_exit_text(app_run)}. No [test.expect] {key} is set, so FlightCheck does not "
+            "claim the app surfaced it; review the output below.",
+            expected=f"[test.expect] {key} (not set)",
+            observed=observed,
+            evidence=evidence,
+        )
+    met = expectation_met(expectation, app_run)
+    if met is None:
+        why = (
+            f"the app did not finish within {config.test.timeout_s} s"
+            if app_run.timed_out or app_run.exit_code is None
+            else f"{expectation.text!r} was not found in the kept part of the app's output, "
+            "which FlightCheck cut at 8 KB"
+        )
+        return _result(
+            check_id,
+            scenario,
+            CheckStatus.NEEDS_REVIEW,
+            f"After {fault_text} (seq {fault.seq}) {why}, so {key} = {expectation.raw!r} "
+            "cannot be judged.",
+            expected=expectation.raw,
+            observed=observed,
+            evidence=evidence,
+        )
+    if met:
+        return _result(
+            check_id,
+            scenario,
+            CheckStatus.PASSED,
+            f"After {fault_text} (seq {fault.seq}) the app met {key} = {expectation.raw!r} "
+            f"({_exit_text(app_run)}).",
+            expected=expectation.raw,
+            observed=observed,
+            evidence=evidence,
+        )
+    return _result(
+        check_id,
+        scenario,
+        CheckStatus.FAILED,
+        f"After {fault_text} (seq {fault.seq}) the app did not meet {key} = "
+        f"{expectation.raw!r} ({_exit_text(app_run)}).",
+        expected=expectation.raw,
+        observed=observed,
+        evidence=evidence,
+    )
+
+
+@_traffic_check("FC-RT-020")
+def check_rt020(
+    exchanges: Sequence[RecordedExchange],
+    app_run: AppRun | None,
+    scenario: Scenario,
+    config: CheckConfig,
+) -> CheckResult:
+    cid = "FC-RT-020"
+    fault, blocked = _truncation(cid, exchanges, scenario, (TRUNCATE_STEP_ID,))
+    if blocked is not None:
+        return blocked
+    assert fault is not None
+    text = 'a truncated answer (Responses status "incomplete" / Chat finish_reason "length")'
+    return _surfaced(
+        cid,
+        scenario,
+        app_run,
+        config,
+        config.expectations.on_truncation,
+        "on_truncation",
+        fault,
+        text,
+    )
+
+
+@_traffic_check("FC-RT-022")
+def check_rt022(
+    exchanges: Sequence[RecordedExchange],
+    app_run: AppRun | None,
+    scenario: Scenario,
+    config: CheckConfig,
+) -> CheckResult:
+    """A later request sends a tool result for a call_id issued in the truncated response."""
+    cid = "FC-RT-022"
+    fault = _fault_exchange(exchanges, (TRUNCATED_TOOL_STEP_ID,))
+    if fault is None:
+        return _not_served(cid, exchanges, scenario, "truncated tool-call")
+    if fault.response_summary.get("no_tools"):
+        return _unsupported(
+            cid,
+            scenario,
+            "app defines no tools: the request carried no function tool, so the mock "
+            "truncated a text answer instead",
+        )
+    issued = issued_call_ids(fault)
+    if fault.response_summary.get("finish") != "truncated_tool_call" or not issued:
+        return skipped(
+            cid,
+            scenario,
+            "the truncated tool call did not reach the app (HTTP "
+            f"{fault.response_status}, finish={_short(fault.response_summary.get('finish'))})",
+        )
+    shown = ", ".join(issued)
+    fault_ev = _traffic_evidence(fault, f"truncated call_ids={shown}")
+    later = [e for e in model_exchanges(exchanges) if e.seq > fault.seq]
+    executed = [
+        (e, r)
+        for e in later
+        for r in tool_results(e)
+        if isinstance(r.call_id, str) and r.call_id in issued
+    ]
+    if executed:
+        seqs = ", ".join(str(n) for n in dict.fromkeys(e.seq for e, _ in executed))
+        return _result(
+            cid,
+            scenario,
+            CheckStatus.FAILED,
+            f"The app sent a tool result (seq {seqs}) for {shown}, a function call cut off "
+            f"inside a truncated response (seq {fault.seq}). Its arguments were incomplete, so "
+            "that result was produced from partial input; the call should not have been "
+            "executed.",
+            expected=f"no tool result for {shown}",
+            observed=f"tool result for {_short(sorted({r.call_id for _, r in executed}))}",
+            evidence=[
+                fault_ev,
+                *[
+                    _traffic_evidence(e, f"tool result call_id={_short(r.call_id)}")
+                    for e, r in executed[:_MAX_EVIDENCE]
+                ],
+            ],
+        )
+    note = "no tool result for the truncated call"
+    return _result(
+        cid,
+        scenario,
+        CheckStatus.PASSED,
+        f"No later request carries a tool result for {shown} from the truncated response "
+        f"(seq {fault.seq}; {len(later)} later request(s) checked). FlightCheck sees only "
+        "traffic: whether the app ran the tool locally without sending a result is not "
+        "observable.",
+        expected=f"no tool result for {shown}",
+        observed=f"{len(later)} later request(s), none with a result for {shown}",
+        evidence=[fault_ev, *_checked_evidence(later, note)],
+    )
+
+
+@_traffic_check("FC-RT-023")
+def check_rt023(
+    exchanges: Sequence[RecordedExchange],
+    app_run: AppRun | None,
+    scenario: Scenario,
+    config: CheckConfig,
+) -> CheckResult:
+    """A later request has the same request_sha256 as the truncated one."""
+    cid = "FC-RT-023"
+    fault, blocked = _truncation(cid, exchanges, scenario, TRUNCATION_STEP_IDS)
+    if blocked is not None:
+        return blocked
+    assert fault is not None
+    later = [e for e in model_exchanges(exchanges) if e.seq > fault.seq]
+    same = [e for e in later if e.request_sha256 == fault.request_sha256]
+    fault_ev = _traffic_evidence(fault, f"truncated; request_sha256={fault.request_sha256[:12]}")
+    if same:
+        return _result(
+            cid,
+            scenario,
+            CheckStatus.FAILED,
+            f"After the truncated answer (seq {fault.seq}) the app resent the identical request "
+            f"(seq {_seqs(same)}); the same output budget runs out the same way.",
+            expected="no identical request after the truncation",
+            observed=f"{len(same)} identical request(s)",
+            evidence=[
+                fault_ev,
+                *[
+                    _traffic_evidence(e, f"identical body, request_sha256={e.request_sha256[:12]}")
+                    for e in same[:_MAX_EVIDENCE]
+                ],
+            ],
+        )
+    return _result(
+        cid,
+        scenario,
+        CheckStatus.PASSED,
+        f"No later request repeats the truncated request (seq {fault.seq}; {len(later)} later "
+        "request(s) checked).",
+        expected="no identical request after the truncation",
+        observed=f"{len(later)} later request(s), none identical",
+        evidence=[fault_ev, *_checked_evidence(later, "different request body")],
+    )
+
+
+@_traffic_check("FC-RT-030")
+def check_rt030(
+    exchanges: Sequence[RecordedExchange],
+    app_run: AppRun | None,
+    scenario: Scenario,
+    config: CheckConfig,
+) -> CheckResult:
+    cid = "FC-RT-030"
+    fault = _fault_exchange(exchanges, (STREAM_FAIL_STEP_ID,))
+    if fault is None:
+        return _not_served(cid, exchanges, scenario, "stream-failure")
+    summary = fault.response_summary
+    if fault.stream and summary.get("finish") == "client_disconnected":
+        text = "a stream the app disconnected from before the scripted failure"
+    elif fault.stream:
+        deltas = summary.get("deltas")
+        count = f" after {deltas} text delta(s)" if isinstance(deltas, int) else ""
+        text = f"a stream that failed{count} (response.failed)"
+    else:
+        text = f"HTTP {fault.response_status} (non-stream request; S06 answers it with a 500)"
+    result = _surfaced(
+        cid,
+        scenario,
+        app_run,
+        config,
+        config.expectations.on_stream_failure,
+        "on_stream_failure",
+        fault,
+        text,
+    )
+    retries = [e for e in model_exchanges(exchanges) if e.seq > fault.seq]
+    if not retries or result.status is CheckStatus.SKIPPED:
+        return result
+    reminder = (
+        f" A later request (seq {_seqs(retries)}) followed the failure, so the app (or its SDK) "
+        "retried.{sdk} Discard any partial output from the failed attempt before using the "
+        "retry's answer."
+    ).format(sdk=_sdk_note(retries))
+    update: dict[str, Any] = {
+        "message": result.message + reminder,
+        "evidence": [*result.evidence, *_checked_evidence(retries, "retry after the failure")],
+    }
+    if result.status is not CheckStatus.FAILED:
+        update["severity"] = Severity.INFO  # §17.4: a retry is reported as info
+    return result.model_copy(update=update)
+
+
 VALIDATORS: dict[str, Validator] = {
     "FC-RT-001": check_rt001,
     "FC-RT-002": check_rt002,
@@ -1356,6 +1816,10 @@ VALIDATORS: dict[str, Validator] = {
     "FC-RT-012": check_rt012,
     "FC-RT-013": check_rt013,
     "FC-RT-014": check_rt014,
+    "FC-RT-020": check_rt020,
+    "FC-RT-022": check_rt022,
+    "FC-RT-023": check_rt023,
+    "FC-RT-030": check_rt030,
     "FC-RT-040": check_rt040,
     "FC-RT-041": check_rt041,
     "FC-RT-050": check_rt050,
@@ -1473,10 +1937,14 @@ __all__ = [
     "VALIDATORS",
     "CheckConfig",
     "CheckMeta",
+    "ExpectKind",
+    "Expectation",
+    "Expectations",
     "ToolResult",
     "by_seq",
     "error_all",
     "evaluate",
+    "expectation_met",
     "gaps_ms",
     "issued_call_ids",
     "model_exchanges",

@@ -397,6 +397,21 @@ def test_rt041_timing() -> None:
     assert slow.status is PASSED and "2000 ms" in slow.message
 
 
+def test_rt040_041_stop_at_the_recovered_answer() -> None:
+    """Phase 7B fix: a request sent right after the recovered 200 (here an app's own
+    follow-up, 50 ms later) is not a retry of the 503 and has no backoff to judge."""
+    traffic = [
+        busy(1, 0, 0),
+        busy(2, 450, 1),
+        busy(3, 1300, 2, step="recover"),
+        ex(4, step="default", at_ms=1350),
+    ]
+    backoff = run("FC-RT-041", traffic, S02)
+    assert backoff.status is NEEDS_REVIEW and backoff.observed == "450 ms, 850 ms"
+    retried = run("FC-RT-040", traffic, S02)
+    assert retried.status is PASSED and "3 attempts" in retried.message
+
+
 @pytest.mark.parametrize("gaps", [(440, 830), (510, 900)])
 def test_rt041_sdk_backoff_is_needs_review_whatever_the_gap(gaps: tuple[int, int]) -> None:
     traffic = [busy(1, 0, 0), busy(2, gaps[0], 1), busy(3, gaps[0] + gaps[1], 2, step="recover")]
