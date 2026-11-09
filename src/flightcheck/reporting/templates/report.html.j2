@@ -1,0 +1,386 @@
+<!doctype html>
+{#- FlightCheck HTML report (plan §24, ADR-021). Autoescaped; no JavaScript, no external
+    assets. Every value comes from html_report.build_view (redacted, pre-grouped). -#}
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="FlightCheck {{ view.meta.tool_version }}">
+<title>{{ view.title }}</title>
+<style>
+:root {
+  --bg: #ffffff; --fg: #1a1a1a; --muted: #555b61; --line: #d4d7db; --panel: #f5f6f7;
+  --code-bg: #f2f3f5; --link: #0b57a4;
+  --critical-bg: #7a0010; --critical-fg: #ffffff;
+  --high-bg: #b3261e; --high-fg: #ffffff;
+  --medium-bg: #f4d27a; --medium-fg: #3d2b00;
+  --low-bg: #cfe3f7; --low-fg: #0b3a66;
+  --info-bg: #e6e8eb; --info-fg: #333a40;
+  --passed-bg: #d6f0dd; --passed-fg: #0f4d22;
+  --failed-bg: #b3261e; --failed-fg: #ffffff;
+  --needs_review-bg: #f4d27a; --needs_review-fg: #3d2b00;
+  --skipped-bg: #e6e8eb; --skipped-fg: #333a40;
+  --unsupported-bg: #e3dcf2; --unsupported-fg: #3a2669;
+  --error-bg: #5c1a63; --error-fg: #ffffff;
+  --ai-bg: #fbf3ff; --ai-line: #8a3fb5; --ai-fg: #4f1d6b;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15171a; --fg: #e8eaed; --muted: #a9b0b8; --line: #3a3f45; --panel: #1f2226;
+    --code-bg: #24282d; --link: #8ab8f0;
+    --info-bg: #3a3f45; --info-fg: #e8eaed;
+    --skipped-bg: #3a3f45; --skipped-fg: #e8eaed;
+    --low-bg: #16385a; --low-fg: #dcecff;
+    --passed-bg: #16432a; --passed-fg: #d6f5df;
+    --unsupported-bg: #352a52; --unsupported-fg: #e6ddff;
+    --ai-bg: #26192e; --ai-line: #b77ddb; --ai-fg: #ecd7fa;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 48px; }
+h1 { font-size: 1.6rem; margin: 0 0 4px; }
+h2 { font-size: 1.25rem; margin: 36px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+h3 { font-size: 1.05rem; margin: 20px 0 8px; }
+a { color: var(--link); }
+p, li, dd, td { overflow-wrap: break-word; }
+table { table-layout: auto; }
+.muted { color: var(--muted); }
+nav ul { list-style: none; padding: 0; margin: 12px 0 0; display: flex; flex-wrap: wrap; gap: 6px 16px; }
+table { border-collapse: collapse; width: 100%; margin: 8px 0; }
+th, td { text-align: left; vertical-align: top; padding: 6px 8px; border-bottom: 1px solid var(--line);
+  overflow-wrap: break-word; word-break: normal; }
+th { font-weight: 600; background: var(--panel); }
+td.num, th.num { text-align: right; white-space: nowrap; }
+.nowrap { white-space: nowrap; }
+dl.meta { display: grid; grid-template-columns: max-content 1fr; gap: 2px 16px; margin: 8px 0; }
+dl.meta dt { color: var(--muted); }
+dl.meta dd { margin: 0; overflow-wrap: anywhere; }
+pre, code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85rem; }
+pre { background: var(--code-bg); padding: 8px 10px; border-radius: 4px; margin: 6px 0;
+  white-space: pre-wrap; overflow-wrap: anywhere; max-height: 32rem; overflow: auto; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+.card { border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; background: var(--panel); }
+.card h3 { margin: 0 0 6px; font-size: 0.95rem; }
+.card table { margin: 0; }
+.card td { border: 0; padding: 2px 4px; }
+.badge { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 0.78rem;
+  font-weight: 600; white-space: nowrap; border: 1px solid transparent; }
+.sev-critical { background: var(--critical-bg); color: var(--critical-fg); }
+.sev-high { background: var(--high-bg); color: var(--high-fg); }
+.sev-medium { background: var(--medium-bg); color: var(--medium-fg); }
+.sev-low { background: var(--low-bg); color: var(--low-fg); }
+.sev-info { background: var(--info-bg); color: var(--info-fg); }
+.st-passed { background: var(--passed-bg); color: var(--passed-fg); }
+.st-failed { background: var(--failed-bg); color: var(--failed-fg); }
+.st-needs_review { background: var(--needs_review-bg); color: var(--needs_review-fg); }
+.st-skipped { background: var(--skipped-bg); color: var(--skipped-fg); }
+.st-unsupported { background: var(--unsupported-bg); color: var(--unsupported-fg); }
+.st-error { background: var(--error-bg); color: var(--error-fg); }
+.ver { border-color: var(--line); color: var(--fg); background: transparent; font-weight: 500; }
+.ver-hypothesis { border-style: dashed; }
+.finding, .check { border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px; margin: 8px 0; }
+.finding header, .check header { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: baseline; }
+.rule { font-weight: 600; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.ai { border: 1px solid var(--ai-line); border-left-width: 5px; border-radius: 6px; padding: 10px 14px;
+  margin: 12px 0; background: var(--ai-bg); }
+.ai-label { color: var(--ai-fg); font-weight: 600; }
+.notice { border-left: 4px solid var(--line); padding: 6px 12px; background: var(--panel); }
+details { margin: 6px 0; }
+summary { cursor: pointer; color: var(--link); }
+footer { margin-top: 40px; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted);
+  font-size: 0.9rem; }
+@media print { pre { max-height: none; } details { display: block; } }
+</style>
+</head>
+<body>
+<main>
+
+<header id="top">
+  <h1>{{ view.title }}</h1>
+  <p class="muted">FlightCheck {{ view.meta.tool_version }} · {{ view.meta.command }} · generated {{ view.meta.generated_at }}</p>
+  <nav aria-label="Sections">
+    <ul>
+      <li><a href="#summary">Summary</a></li>
+      <li><a href="#providers">Providers</a></li>
+      <li><a href="#findings">Findings</a></li>
+      <li><a href="#scenarios">Runtime scenarios</a></li>
+      <li><a href="#ai">AI suggestions</a></li>
+      <li><a href="#diagnostics">Diagnostics</a></li>
+      <li><a href="#limitations">Limitations</a></li>
+    </ul>
+  </nav>
+</header>
+
+<section id="metadata" aria-labelledby="metadata-h">
+  <h2 id="metadata-h">Report metadata</h2>
+  <dl class="meta">
+    <dt>Command</dt><dd>{{ view.meta.command }}</dd>
+    {% if view.repo %}
+    <dt>Repository</dt><dd>{{ view.repo.root_name }}</dd>
+    <dt>Python files scanned</dt><dd>{{ view.repo.files }} ({{ view.repo.bytes }} bytes)</dd>
+    <dt>Files skipped</dt><dd>{% for s in view.repo.skipped %}{{ s.reason }}: {{ s.count }}{% if not loop.last %}, {% endif %}{% else %}none{% endfor %}</dd>
+    {% endif %}
+    <dt>Generated at</dt><dd>{{ view.meta.generated_at }}</dd>
+    <dt>FlightCheck</dt><dd>{{ view.meta.tool_version }} (report schema {{ view.meta.schema_version }})</dd>
+    <dt>Python</dt><dd>{{ view.meta.python_version }} on {{ view.meta.platform }}</dd>
+    <dt>Mock fidelity</dt><dd>{{ view.meta.mock_fidelity }}</dd>
+    <dt>Options</dt><dd>{% for o in view.meta.options %}<code>{{ o.name }}={{ o.value }}</code>{% if not loop.last %} {% endif %}{% else %}none{% endfor %}</dd>
+  </dl>
+</section>
+
+<section id="summary" aria-labelledby="summary-h">
+  <h2 id="summary-h">Summary</h2>
+  <p>{{ view.cards.findings_total }} finding(s){% if view.cards.highest_severity %}, highest severity {{ view.cards.highest_severity }}{% endif %} · {{ view.cards.checks_total }} runtime check(s).
+  AI suggestions are listed in their own section and are not counted here.</p>
+  <div class="cards">
+    <div class="card">
+      <h3>Findings by severity</h3>
+      <table>
+        {% for row in view.cards.severity %}
+        <tr><td><span class="badge sev-{{ row.name }}">{{ row.name }}</span></td><td class="num">{{ row.count }}</td></tr>
+        {% endfor %}
+      </table>
+    </div>
+    <div class="card">
+      <h3>Findings by kind</h3>
+      <table>
+        {% for row in view.cards.kind %}
+        <tr><td>{{ row.name }}</td><td class="num">{{ row.count }}</td></tr>
+        {% endfor %}
+      </table>
+    </div>
+    <div class="card">
+      <h3>Hypotheses (unverified)</h3>
+      <table>
+        <tr><td>hypothesis</td><td class="num">{{ view.cards.hypotheses }}</td></tr>
+      </table>
+      <p class="muted">Kept separate: not confirmed by the contract or by traffic, and not counted by <code>--fail-on</code> unless <code>--fail-on-hypotheses</code>.</p>
+    </div>
+    <div class="card">
+      <h3>Runtime checks by status</h3>
+      <table>
+        {% for row in view.cards.status %}
+        <tr><td><span class="badge st-{{ row.name }}">{{ row.label }}</span></td><td class="num">{{ row.count }}</td></tr>
+        {% endfor %}
+      </table>
+    </div>
+    <div class="card">
+      <h3>By verification level</h3>
+      <table>
+        <tr><th></th><th class="num">findings</th><th class="num">checks</th></tr>
+        {% for row in view.cards.verification %}
+        <tr><td><span class="badge ver">{{ row.label }}</span></td><td class="num">{{ row.findings }}</td><td class="num">{{ row.checks }}</td></tr>
+        {% endfor %}
+      </table>
+    </div>
+  </div>
+</section>
+
+<section id="providers" aria-labelledby="providers-h">
+  <h2 id="providers-h">Providers and capability profile</h2>
+  {% if view.providers %}
+  <table>
+    <tr><th>Provider</th><th>Confidence</th><th>Location</th><th>Signals</th></tr>
+    {% for p in view.providers %}
+    <tr><td>{{ p.provider }}</td><td>{{ p.confidence }}</td><td><code>{{ p.location }}</code></td><td>{{ p.signals }}</td></tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p>No provider detected.</p>
+  {% endif %}
+  {% if view.capability %}
+  <h3>Capability profile: {{ view.capability.provider }}</h3>
+  <dl class="meta">
+    <dt>Base URL</dt><dd><code>{{ view.capability.base_url }}</code></dd>
+    <dt>Documented models</dt><dd>{{ view.capability.documented_models }}</dd>
+    <dt>Max output tokens</dt><dd>{{ view.capability.max_output_tokens }}</dd>
+  </dl>
+  <details>
+    <summary>{{ view.capability.entries | length }} capabilities</summary>
+    <table>
+      <tr><th>Capability</th><th>Level</th><th>Source</th><th>Note</th></tr>
+      {% for e in view.capability.entries %}
+      <tr><td><code>{{ e.capability }}</code></td><td>{{ e.level }}</td><td>{{ e.source }}</td><td>{{ e.note }}</td></tr>
+      {% endfor %}
+    </table>
+  </details>
+  {% else %}
+  <p class="muted">No capability profile in this report.</p>
+  {% endif %}
+</section>
+
+<section id="findings" aria-labelledby="findings-h">
+  <h2 id="findings-h">Findings</h2>
+  {% for group in view.file_groups %}
+  <h3><code>{{ group.path }}</code> <span class="muted">({{ group.count }})</span></h3>
+  {% for f in group.findings %}
+  <article class="finding" id="{{ f.id }}">
+    <header>
+      <span class="badge sev-{{ f.severity }}">{{ f.severity }}</span>
+      <span class="rule">{{ f.rule_id }}</span>
+      <span>{{ f.title }}</span>
+      {% if f.line %}<span class="muted">{{ f.line }}</span>{% endif %}
+      <span class="badge ver ver-{{ f.verification_class }}">{{ f.verification_label }}</span>
+      <span class="muted">confidence {{ f.confidence }}</span>
+    </header>
+    <p>{{ f.message }}</p>
+    {% if f.remediation %}<p><strong>Remediation:</strong> {{ f.remediation }}</p>{% endif %}
+    {% if f.check_ref %}<p class="muted">Runtime check: <code>{{ f.check_ref }}</code></p>{% endif %}
+    {% for e in f.evidence %}
+    <div class="muted">{{ e.label }}{% if e.location %} <code>{{ e.location }}</code>{% endif %}{% if e.note %} — {{ e.note }}{% endif %}</div>
+    {% if e.excerpt %}<pre>{{ e.excerpt }}</pre>{% endif %}
+    {% endfor %}
+    {% if f.doc_url %}<p><a href="{{ f.doc_url }}" rel="noopener noreferrer">Documentation</a></p>{% endif %}
+  </article>
+  {% endfor %}
+  {% else %}
+  <p>No findings.</p>
+  {% endfor %}
+</section>
+
+<section id="scenarios" aria-labelledby="scenarios-h">
+  <h2 id="scenarios-h">Runtime scenarios</h2>
+  {% if view.scenarios %}
+  <p class="notice">{{ view.mock_fidelity_notice }}</p>
+  <table>
+    <tr><th>Scenario</th><th>Name</th><th>Status</th><th>App</th><th class="num">Requests</th>
+      {% for c in view.cards.status %}<th class="num">{{ c.label }}</th>{% endfor %}</tr>
+    {% for s in view.scenarios %}
+    <tr><td class="nowrap"><a href="#scenario-{{ s.id }}">{{ s.id }}</a></td><td>{{ s.name }}</td>
+      <td><span class="badge st-{{ s.status }}">{{ s.status_label }}</span></td>
+      <td>{{ s.app_exit }}</td><td class="num">{{ s.requests }}</td>
+      {% for c in s.counts %}<td class="num">{{ c.count }}</td>{% endfor %}</tr>
+    {% endfor %}
+  </table>
+  {% for s in view.scenarios %}
+  <h3 id="scenario-{{ s.id }}">{{ s.id }} {{ s.name }} <span class="badge st-{{ s.status }}">{{ s.status_label }}</span></h3>
+  <p class="muted">App: {{ s.app_exit }}{% if s.duration_ms is not none %} in {{ s.duration_ms }} ms{% endif %} · {{ s.requests }} request(s) recorded{% if s.command %} · <code>{{ s.command }}</code>{% endif %}</p>
+  {% if s.checks %}
+  <table>
+    <tr><th>Check</th><th>Status</th><th>Severity</th><th>Verification</th><th>Message</th></tr>
+    {% for c in s.checks %}
+    <tr>
+      <td class="nowrap"><code>{{ c.check_id }}</code></td>
+      <td><span class="badge st-{{ c.status }}">{{ c.status_label }}</span></td>
+      <td><span class="badge sev-{{ c.severity }}">{{ c.severity }}</span></td>
+      <td><span class="badge ver">{{ c.verification_label }}</span></td>
+      <td>{{ c.message }}
+        {% if c.reason %}<div class="muted">Reason: {{ c.reason }}</div>{% endif %}
+        {% if c.expected or c.observed %}<div class="muted">Expected: {{ c.expected or "—" }} · observed: {{ c.observed or "—" }}</div>{% endif %}
+        {% if c.evidence %}
+        <details>
+          <summary>{{ c.evidence | length }} evidence item(s)</summary>
+          {% for e in c.evidence %}
+          <div class="muted">{{ e.label }}{% if e.location %} <code>{{ e.location }}</code>{% endif %}{% if e.note %} — {{ e.note }}{% endif %}</div>
+          {% if e.excerpt %}<pre>{{ e.excerpt }}</pre>{% endif %}
+          {% endfor %}
+        </details>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p>No checks in this scenario.</p>
+  {% endif %}
+  {% if s.exchanges %}
+  <details>
+    <summary>Traffic: {{ s.exchanges | length }} recorded exchange(s)</summary>
+    {% for e in s.exchanges %}
+    <h4>#{{ e.seq }} {{ e.method }} <code>{{ e.path }}</code> → {{ e.status }}</h4>
+    <p class="muted">endpoint {{ e.endpoint or "—" }} · stream {{ e.stream }} · step {{ e.step_id }}</p>
+    {% if e.request %}<div class="muted">Request body (redacted)</div><pre>{{ e.request }}</pre>{% endif %}
+    {% if e.response %}<div class="muted">Response summary</div><pre>{{ e.response }}</pre>{% endif %}
+    {% endfor %}
+  </details>
+  {% endif %}
+  {% if s.stdout or s.stderr %}
+  <details>
+    <summary>App output (redacted)</summary>
+    {% if s.stdout %}<div class="muted">stdout</div><pre>{{ s.stdout }}</pre>{% endif %}
+    {% if s.stderr %}<div class="muted">stderr</div><pre>{{ s.stderr }}</pre>{% endif %}
+  </details>
+  {% endif %}
+  {% endfor %}
+  {% else %}
+  <p>No runtime scenarios in this report. Run <code>flightcheck test PATH --allow-exec</code> to observe the app with the mock.</p>
+  {% endif %}
+</section>
+
+<section id="ai" aria-labelledby="ai-h">
+  <h2 id="ai-h">AI suggestions</h2>
+  <p class="notice"><span class="ai-label">{{ view.ai.label }}.</span> This section is separate from the findings and checks above: nothing here changes a finding, a check status, a count or an exit code.</p>
+  {% if view.ai.entries %}
+  <p>{{ view.ai.explained }} explained, {{ view.ai.fallbacks }} fallback(s).</p>
+  {% for a in view.ai.entries %}
+  <article class="ai">
+    <header>
+      <span class="badge sev-{{ a.severity }}">{{ a.severity }}</span>
+      <span class="rule">{{ a.rule_id }}</span>
+      <span>{{ a.title }}</span>
+      <span class="muted">({{ a.instances }} instance(s): {{ a.finding_ids }})</span>
+    </header>
+    {% if a.explanation %}
+    <p class="ai-label">AI suggestion ({{ a.provenance }}) — not verified</p>
+    <dl class="meta">
+      <dt>Summary</dt><dd>{{ a.explanation.summary }}</dd>
+      <dt>Root cause</dt><dd>{{ a.explanation.root_cause }}</dd>
+      <dt>Impact</dt><dd>{{ a.explanation.impact }}</dd>
+      {% for step in a.explanation.fix_steps %}
+      <dt>Fix {{ loop.index }}</dt><dd>{{ step }}</dd>
+      {% endfor %}
+      {% for caveat in a.explanation.caveats %}
+      <dt>Caveat</dt><dd>{{ caveat }}</dd>
+      {% endfor %}
+      <dt>Confidence</dt><dd>{{ a.explanation.confidence }} (model-stated)</dd>
+    </dl>
+    {% if a.diff %}
+    <div class="ai-label">Proposed diff — {{ view.ai.label }}</div>
+    <pre>{{ a.diff }}</pre>
+    {% endif %}
+    <p class="muted">Backend {{ a.backend }}{% if a.model %} · model {{ a.model }}{% endif %} · structured output {{ a.structured_output }} · {{ a.generated_at }}</p>
+    {% else %}
+    <p><strong>Fallback:</strong> {{ a.fallback_reason or "unknown" }}{% if a.rejected_reason %} ({{ a.rejected_reason }}){% endif %}.{% if a.fallback_hint %} {{ a.fallback_hint }}{% endif %}</p>
+    <p><strong>Remediation (deterministic, from the rule catalogue):</strong> {{ a.remediation or "No deterministic remediation is known." }}</p>
+    {% endif %}
+  </article>
+  {% endfor %}
+  {% else %}
+  <p>No AI suggestions in this report. Run <code>flightcheck explain REPORT.json</code> to add them (opt-in).</p>
+  {% endif %}
+</section>
+
+<section id="diagnostics" aria-labelledby="diagnostics-h">
+  <h2 id="diagnostics-h">Diagnostics</h2>
+  {% if view.diagnostics %}
+  <table>
+    <tr><th>Level</th><th>Code</th><th>Path</th><th>Message</th></tr>
+    {% for d in view.diagnostics %}
+    <tr><td>{{ d.level }}</td><td><code>{{ d.code }}</code></td><td>{% if d.path %}<code>{{ d.path }}</code>{% endif %}</td><td>{{ d.message }}</td></tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p>No diagnostics.</p>
+  {% endif %}
+</section>
+
+<section id="limitations" aria-labelledby="limitations-h">
+  <h2 id="limitations-h">Limitations and mock fidelity</h2>
+  <p>Verification levels: <strong>static</strong> = a source pattern match; <strong>observed with mock</strong> = seen in traffic recorded against FlightCheck's local mock; <strong>observed live</strong> = seen against the real BharatCode API; <strong>AI suggestion</strong> = model-generated text, never verified.</p>
+  <p class="notice">{{ view.mock_fidelity_notice }}</p>
+  <ul>
+    {% for item in view.limitations %}
+    <li>{{ item }}</li>
+    {% endfor %}
+  </ul>
+</section>
+
+<footer>
+  Generated by FlightCheck {{ view.meta.tool_version }} at {{ view.meta.generated_at }} (from the report's <code>generated_at</code>). Report schema {{ view.meta.schema_version }}. <a href="#top">Back to top</a>
+</footer>
+
+</main>
+</body>
+</html>

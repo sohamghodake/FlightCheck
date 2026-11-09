@@ -27,6 +27,14 @@ class OutputFormat(StrEnum):
     ALL = "all"
 
 
+class ReportFormat(StrEnum):
+    """``flightcheck report --format`` (§23.2); markdown is P1 and exits 2."""
+
+    HTML = "html"
+    TERMINAL = "terminal"
+    MARKDOWN = "markdown"
+
+
 class ProviderChoice(StrEnum):
     AUTO = "auto"
     BHARATCODE = "bharatcode"
@@ -76,8 +84,17 @@ def exceeds_fail_on(report: Report, fail_on: FailOn, *, include_hypotheses: bool
 
 
 def render_exit_line(
-    console: Console, code: int, fail_on: FailOn, target: str, *, command: str = "scan"
+    console: Console,
+    code: int,
+    fail_on: FailOn,
+    target: str,
+    *,
+    command: str = "scan",
+    report_path: str | None = None,
 ) -> None:
+    """The exit line with next-step hints. Hints name only commands that exist (ADR-025
+    item 5): ``test`` after a scan, ``explain <report>`` when ``report_path`` is given (the
+    caller passes it only when the report has something to explain; ADR-032)."""
     if fail_on is FailOn.NONE:
         reason = "--fail-on none"
     elif code == 1:
@@ -88,6 +105,8 @@ def render_exit_line(
     hints = [f"fix the findings above and re-run {rerun}"] if code else []
     if command == "scan":  # ADR-025 item 5: hints name only commands that exist
         hints.append(f"flightcheck test {target} --allow-exec")
+    if report_path:
+        hints.append(f"flightcheck explain {shlex.quote(report_path)}")
     hint = f" Next: {' · '.join(hints)}" if hints else ""
     console.print(Text(f"Exit {code} ({reason}).{hint}"), soft_wrap=True)
 
@@ -233,6 +252,7 @@ __all__ = [
     "LLMChoice",
     "OutputFormat",
     "ProviderChoice",
+    "ReportFormat",
     "exceeds_fail_on",
     "is_interactive",
     "make_console",

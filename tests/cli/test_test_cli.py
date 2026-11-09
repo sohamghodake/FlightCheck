@@ -85,8 +85,6 @@ def test_missing_test_section_prints_a_ready_to_paste_block(
 @pytest.mark.parametrize(
     "args",
     [
-        ["--format", "html"],
-        ["--format", "all"],
         ["--config", "other.toml"],
         ["--timeout", "0"],
         ["--timeout", "601"],
@@ -181,6 +179,28 @@ def test_needs_review_never_fails_the_run(tmp_path: Path) -> None:
     report = read_report(tmp_path / REPORT_FILENAME)
     checks = {c.check_id: c.status for c in report.scenarios[0].checks}
     assert checks["FC-RT-020"] is CheckStatus.NEEDS_REVIEW and report.findings == []
+
+
+@pytest.mark.parametrize("fmt", ["html", "all"])
+def test_html_formats_write_the_html_report(tmp_path: Path, no_execution: None, fmt: str) -> None:
+    """Phase 9 (ADR-032): the pre-flight refuses this app, so nothing runs, but the report
+    (all checks skipped) is still written as JSON and HTML."""
+    root = APPS / "bc_bad_hardcoded_base_url"
+    result = _test(
+        str(root), "--allow-exec", "--scenario", "S01", "--format", fmt, "--output", str(tmp_path)
+    )
+    assert result.exit_code in (0, 1), result.output
+    html_path = tmp_path / "flightcheck-report.html"
+    assert f"HTML report written: {html_path}" in result.stdout
+    assert (tmp_path / REPORT_FILENAME).is_file()
+    html = html_path.read_text(encoding="utf-8")
+    assert 'id="scenario-S01"' in html and "st-skipped" in html
+    assert PLANTED_KEY not in html
+    if fmt == "html":
+        assert result.stdout.splitlines()[0] == f"Report written: {tmp_path / REPORT_FILENAME}"
+        assert " Scenarios" not in result.stdout
+    else:
+        assert " Scenarios" in result.stdout and "Exit " in result.stdout
 
 
 def test_hardcoded_base_url_shows_the_panel_but_never_runs(

@@ -1,0 +1,48 @@
+# Example: run FlightCheck in your own repository's CI (docs/CI.md).
+#
+# In this repository it is manual only (workflow_dispatch): the fixture apps under tests/ are
+# deliberately broken, so `flightcheck scan . --fail-on high` would fail every push (ADR-032).
+# To use it in your project, copy this file, change `on:` to `push` / `pull_request`, replace
+# the "Install FlightCheck" step with `pip install "git+https://github.com/sohamghodake/FlightCheck@main"`
+# (or a pinned tag), and set PATH_TO_SCAN to your app directory.
+name: FlightCheck example
+
+on:
+  workflow_dispatch:
+    inputs:
+      path:
+        description: Directory to scan
+        required: false
+        default: src
+
+permissions:
+  contents: read
+
+jobs:
+  flightcheck:
+    runs-on: ubuntu-latest
+    env:
+      PATH_TO_SCAN: ${{ inputs.path || 'src' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install FlightCheck
+        run: |
+          python -m pip install --upgrade pip
+          pip install .
+
+      - name: Scan (static; no code is executed)
+        run: flightcheck scan "$PATH_TO_SCAN" --format all --fail-on high
+
+      - name: Upload the reports
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: flightcheck-report
+          path: ${{ env.PATH_TO_SCAN }}/.flightcheck/
+          if-no-files-found: warn
+          include-hidden-files: true  # .flightcheck/ is a dot-directory

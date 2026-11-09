@@ -107,6 +107,28 @@ def test_raw_http_posts(repo):
     assert len(f.call_sites) == 2  # the upload post is not an API call
 
 
+def test_route_decorator_post_is_not_an_api_call_phase9():
+    """A web framework route such as FastAPI's ``@app.post("/responses")`` registers a
+    handler; it is not an outgoing request (the dogfood false positive in mock/app.py)."""
+    source = (
+        "import httpx2\n"
+        "from fastapi import FastAPI\n"
+        "app = FastAPI()\n"
+        "base = '/api/model/v1'\n"
+        "@app.post(f'{base}/responses')\n"
+        "async def responses(request):\n"
+        "    return await handle(request)\n"
+        "@app.post('/v1/chat/completions')\n"
+        "def chat(request):\n"
+        "    return httpx2.post('https://bharatcode.ai/api/model/v1/responses', json={})\n"
+    )
+    f = parse_source(source, "routes.py")
+    (call,) = f.call_sites  # only the real request inside the handler
+    assert call.kind == "http.post"
+    assert call.receiver == "httpx2"
+    assert call.location.line == 10
+
+
 def test_env_reads(repo):
     reads = {(r.name, r.kind, r.has_default) for r in repo.file("env_reads.py").env_reads}
     assert reads == {

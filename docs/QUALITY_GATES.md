@@ -12,7 +12,10 @@ ruff check . && ruff format --check . && pytest -m "not live" -q
 ```
 
 CI ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) runs the same three commands on
-Python 3.11, 3.12 and 3.13 (ubuntu-latest) for every push and pull request.
+Python 3.11, 3.12 and 3.13 (ubuntu-latest) for every push and pull request, then (from Phase 9)
+`python scripts/eval_fixtures.py --check --runtime` and the dogfood
+`flightcheck scan src --fail-on low` (report written to `$RUNNER_TEMP`). The example workflow
+`flightcheck-example.yml` is `workflow_dispatch`-only and never runs on push (ADR-032).
 
 ## Gate table
 
@@ -42,3 +45,9 @@ Python 3.11, 3.12 and 3.13 (ubuntu-latest) for every push and pull request.
 
 All three Phase 0 gates pass locally on Python 3.12.14 (see
 [handoffs/PHASE_00.md](handoffs/PHASE_00.md)).
+
+## Phase 9 result
+
+The dogfood gate is active: `flightcheck scan src --fail-on low` exits 0 after the parser stopped
+treating route decorators such as FastAPI's `@app.post("/responses")` as API calls (ADR-032
+item 4). The runtime evaluation gate now runs in CI too.

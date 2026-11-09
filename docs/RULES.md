@@ -73,7 +73,8 @@ needs non-Python scanning.
 
 ## Explicit limitations
 
-These are copied from plan §16.2 and ADR-011, and will also appear in the HTML report footer.
+These are copied from plan §16.2 and ADR-011. A plain-text version is shown in the HTML report's
+"Limitations and mock fidelity" section (`reporting/html_report.LIMITATIONS`).
 
 - **One-hop name resolution only.** A call's client is found from an inline constructor, a bare
   name bound by `=`, an annotated assignment or `with … as name` in the current function, then in

@@ -4,12 +4,18 @@ Exit codes (plan §23.1): 0 = no finding at or above ``--fail-on``; 1 = at least
 runtime checks count through their mirrored runtime findings; needs_review never does);
 2 = usage, configuration or consent error; 3 = internal error (including the mock failing to
 start). ``explain`` exits 0 on success *or* fallback, 2 for usage/consent/report errors.
+``report`` exits 0 on success, 2 for an unreadable report or a usage error.
+
+``--format`` (ADR-032): ``terminal`` prints the tables; ``json`` prints only the report path;
+``html`` writes the HTML next to the JSON and prints both paths; ``all`` prints the tables and
+writes both. The JSON report is always written; exit codes never depend on the format.
 """
 
 from pathlib import Path
 from typing import Annotated
 
 import typer
+from rich.console import Console
 
 from flightcheck import __version__
 from flightcheck.cli.render import (
@@ -18,6 +24,7 @@ from flightcheck.cli.render import (
     LLMChoice,
     OutputFormat,
     ProviderChoice,
+    ReportFormat,
     exceeds_fail_on,
     is_interactive,
     make_console,
@@ -32,7 +39,7 @@ from flightcheck.cli.render import (
 from flightcheck.core.config import load_config
 from flightcheck.core.errors import ConfigError, ConsentRequiredError, FlightCheckError
 from flightcheck.core.logging import configure_logging
-from flightcheck.core.models import ScanRequest, Severity, TestRequest
+from flightcheck.core.models import CheckStatus, Report, ScanRequest, Severity, TestRequest
 from flightcheck.core.paths import default_output_dir, resolve_inside
 from flightcheck.orchestrator import (
     ConsentInfo,
@@ -44,6 +51,7 @@ from flightcheck.orchestrator import (
     run_scan,
     run_test,
 )
+from flightcheck.reporting.html_report import HTML_FILENAME, write_html
 from flightcheck.reporting.json_report import (
     read_report,
     report_to_json,
@@ -60,10 +68,12 @@ Available:
   scan PATH                 static analysis against BharatCode's documented contract
   test PATH --allow-exec    run the app against a local traffic-recording mock
   explain REPORT.json       opt-in explanations of findings using BharatCode
+  report REPORT.json        render a saved report as HTML or in the terminal
 
 \b
 Coming in later phases (not available yet):
-  report REPORT.json        render a saved report (HTML or Markdown)
+  ci PATH                   one-step CI run (P1)
+  report --format markdown  Markdown output (P1)
 """
 
 app = typer.Typer(
@@ -104,6 +114,21 @@ def _display(path: Path) -> str:
         return str(path)
 
 
+def _wants_html(fmt: OutputFormat) -> bool:
+    return fmt in (OutputFormat.HTML, OutputFormat.ALL)
+
+
+def _explainable(report: Report) -> bool:
+    """``explain`` has something to do: a finding or a needs_review check (ADR-031 item 4)."""
+    return bool(report.findings) or any(
+        c.status is CheckStatus.NEEDS_REVIEW for s in report.scenarios for c in s.checks
+    )
+
+
+def _print_path(console: Console, label: str, path: str) -> None:
+    console.print(f"{label}: {path}", markup=False, soft_wrap=True)
+
+
 def _scan(
     path: Path,
     fmt: OutputFormat,
@@ -115,10 +140,6 @@ def _scan(
     fail_on_hypotheses: bool,
     no_color: bool,
 ) -> int:
-    if fmt in (OutputFormat.HTML, OutputFormat.ALL):
-        raise ConfigError(
-            "HTML report arrives in Phase 9.", hint="Use --format terminal or --format json."
-        )
     console = make_console(no_color=no_color)
     request = ScanRequest(
         root=path,
@@ -128,17 +149,31 @@ def _scan(
     )
     report = run_scan(request, load_config(path))
     out_dir = output if output is not None else default_output_dir(path)
-    shown_path = _display(write_report(report, out_dir))
+    json_path = write_report(report, out_dir)
+    shown_path = _display(json_path)
+    html_path = (
+        _display(write_html(report, json_path.parent / HTML_FILENAME)) if _wants_html(fmt) else None
+    )
     code = 1 if exceeds_fail_on(report, fail_on, include_hypotheses=fail_on_hypotheses) else 0
-    if fmt is OutputFormat.JSON:
-        console.print(f"Report written: {shown_path}", markup=False, soft_wrap=True)
+    if fmt in (OutputFormat.JSON, OutputFormat.HTML):
+        _print_path(console, "Report written", shown_path)
+        if html_path:
+            _print_path(console, "HTML report written", html_path)
         return code
     if report.repo is not None and report.repo.python_files_scanned == 0:
         console.print(
             f"No Python files found under {path}; nothing to scan.", markup=False, highlight=False
         )
     render_scan(console, report, target=str(path), report_path=shown_path)
-    render_exit_line(console, code, fail_on, str(path))
+    if html_path:
+        _print_path(console, "HTML report written", html_path)
+    render_exit_line(
+        console,
+        code,
+        fail_on,
+        str(path),
+        report_path=shown_path if _explainable(report) else None,
+    )
     return code
 
 
@@ -149,7 +184,11 @@ def scan(
     ] = Path("."),
     fmt: Annotated[
         OutputFormat,
-        typer.Option("--format", help="Output format; the JSON report is always written."),
+        typer.Option(
+            "--format",
+            help="Output format; the JSON report is always written (html/all: also "
+            "flightcheck-report.html next to it).",
+        ),
     ] = OutputFormat.TERMINAL,
     output: Annotated[
         Path | None,
@@ -211,10 +250,6 @@ def _test(
     keep_traffic: bool,
     no_color: bool,
 ) -> int:
-    if fmt in (OutputFormat.HTML, OutputFormat.ALL):
-        raise ConfigError(
-            "HTML report arrives in Phase 9.", hint="Use --format terminal or --format json."
-        )
     if config_file is not None:
         raise ConfigError(
             "--config is not supported yet (P1, ADR-030).",
@@ -239,19 +274,34 @@ def _test(
     )
     report = run_test(request, config, plan=plan)
     out_dir = output if output is not None else default_output_dir(path)
-    shown_path = _display(write_report(report, out_dir))
+    json_path = write_report(report, out_dir)
+    shown_path = _display(json_path)
     traffic_path = _display(write_traffic(report, out_dir)) if keep_traffic else None
+    html_path = (
+        _display(write_html(report, json_path.parent / HTML_FILENAME)) if _wants_html(fmt) else None
+    )
     code = 1 if exceeds_fail_on(report, fail_on, include_hypotheses=False) else 0
     console = make_console(no_color=no_color)
-    if fmt is OutputFormat.JSON:
-        console.print(f"Report written: {shown_path}", markup=False, soft_wrap=True)
+    if fmt in (OutputFormat.JSON, OutputFormat.HTML):
+        _print_path(console, "Report written", shown_path)
         if traffic_path:
-            console.print(f"Traffic written: {traffic_path}", markup=False, soft_wrap=True)
+            _print_path(console, "Traffic written", traffic_path)
+        if html_path:
+            _print_path(console, "HTML report written", html_path)
         return code
     render_test(console, report, target=str(path), report_path=shown_path)
     if traffic_path:
-        console.print(f"Traffic written: {traffic_path}", markup=False, soft_wrap=True)
-    render_exit_line(console, code, fail_on, str(path), command="test")
+        _print_path(console, "Traffic written", traffic_path)
+    if html_path:
+        _print_path(console, "HTML report written", html_path)
+    render_exit_line(
+        console,
+        code,
+        fail_on,
+        str(path),
+        command="test",
+        report_path=shown_path if _explainable(report) else None,
+    )
     return code
 
 
@@ -277,7 +327,11 @@ def test(
     ] = None,
     fmt: Annotated[
         OutputFormat,
-        typer.Option("--format", help="Output format; the JSON report is always written."),
+        typer.Option(
+            "--format",
+            help="Output format; the JSON report is always written (html/all: also "
+            "flightcheck-report.html next to it).",
+        ),
     ] = OutputFormat.TERMINAL,
     output: Annotated[
         Path | None,
@@ -348,6 +402,14 @@ def _explained_path(report_path: Path, output: Path | None) -> Path:
     return target
 
 
+def _explained_html_path(explained_json: Path) -> Path:
+    """``<stem>.explained.json`` → ``<stem>.explained.html``; never the JSON file itself."""
+    html = explained_json.with_suffix(".html")
+    return (
+        html if html != explained_json else explained_json.with_name(explained_json.name + ".html")
+    )
+
+
 def _explain(
     report_path: Path,
     llm: LLMChoice | None,
@@ -361,14 +423,15 @@ def _explain(
     fmt: OutputFormat,
     no_color: bool,
 ) -> int:
-    if fmt in (OutputFormat.HTML, OutputFormat.ALL):
-        raise ConfigError(
-            "HTML report arrives in Phase 9.", hint="Use --format terminal or --format json."
-        )
     err = make_console(no_color=no_color, stderr=True)
     console = make_console(no_color=no_color)
     report = read_report(report_path)  # unknown schema major / not a report → exit 2
     target = _explained_path(report_path, output)
+    if _wants_html(fmt) and _explained_html_path(target).resolve() == report_path.resolve():
+        raise ConfigError(
+            "The HTML report would overwrite the input report.",
+            hint="Choose another --output FILE.",
+        )
     overrides = {
         "explain": {
             "llm": llm.value if llm else None,
@@ -411,10 +474,17 @@ def _explain(
     written = resolve_inside(target.parent, target.name)
     written.write_text(report_to_json(explained), encoding="utf-8")
     shown_path = _display(written)
-    if fmt is OutputFormat.JSON:
-        console.print(f"Explained report written: {shown_path}", markup=False, soft_wrap=True)
+    html_path = (
+        _display(write_html(explained, _explained_html_path(written))) if _wants_html(fmt) else None
+    )
+    if fmt in (OutputFormat.JSON, OutputFormat.HTML):
+        _print_path(console, "Explained report written", shown_path)
+        if html_path:
+            _print_path(console, "HTML report written", html_path)
         return 0
     render_explain(console, explained, report_path=shown_path)
+    if html_path:
+        _print_path(console, "HTML report written", html_path)
     return 0
 
 
@@ -453,7 +523,11 @@ def explain(
     ] = None,
     fmt: Annotated[
         OutputFormat,
-        typer.Option("--format", help="Output format; the explained JSON is always written."),
+        typer.Option(
+            "--format",
+            help="Output format; the explained JSON is always written (html/all: also "
+            "<report>.explained.html).",
+        ),
     ] = OutputFormat.TERMINAL,
     no_color: Annotated[bool, typer.Option("--no-color", help="Disable colour output.")] = False,
     verbose: Annotated[
@@ -477,6 +551,77 @@ def explain(
             fmt,
             no_color,
         )
+    except FlightCheckError as exc:
+        render_error(err, exc)
+        code = exc.exit_code
+    except Exception as exc:  # unexpected: exit 3 with a hint
+        render_internal_error(err, exc, verbose=verbose > 0)
+        code = 3
+    raise typer.Exit(code)
+
+
+def _report_html_path(report_path: Path, output: Path | None) -> Path:
+    target = output if output is not None else report_path.with_suffix(".html")
+    if target.exists() and target.is_dir():
+        raise ConfigError(f"--output is a directory, not a file: {target}")
+    if target.resolve() == report_path.resolve():
+        raise ConfigError(
+            "--output would overwrite the input report.", hint="Choose another --output FILE."
+        )
+    return target
+
+
+def _report(report_path: Path, fmt: ReportFormat, output: Path | None, no_color: bool) -> int:
+    if fmt is ReportFormat.MARKDOWN:
+        raise ConfigError(
+            "Markdown output is P1 and not implemented yet.",
+            hint="Use --format html or --format terminal.",
+        )
+    if fmt is ReportFormat.TERMINAL and output is not None:
+        raise ConfigError(
+            "--output applies to --format html only.", hint="Drop --output, or use --format html."
+        )
+    report = read_report(report_path)  # unreadable / not a report / newer major → exit 2
+    console = make_console(no_color=no_color)
+    if fmt is ReportFormat.HTML:
+        written = write_html(report, _report_html_path(report_path, output))
+        _print_path(console, "HTML report written", _display(written.resolve()))
+        return 0
+    shown = _display(report_path.resolve())
+    target = report.repo.root_name if report.repo else shown
+    if report.metadata.command == "test" or report.scenarios:
+        render_test(console, report, target=target, report_path=shown)
+    else:
+        render_scan(console, report, target=target, report_path=shown)
+    if report.ai_suggestions:
+        console.print()
+        render_explain(console, report, report_path=None)
+    return 0
+
+
+@app.command()
+def report(
+    report_file: Annotated[
+        Path, typer.Argument(metavar="REPORT.json", help="A saved FlightCheck JSON report.")
+    ],
+    fmt: Annotated[
+        ReportFormat,
+        typer.Option("--format", help="html (default), terminal; markdown is P1."),
+    ] = ReportFormat.HTML,
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", help="HTML file [default: <report>.html next to the report]."),
+    ] = None,
+    no_color: Annotated[bool, typer.Option("--no-color", help="Disable colour output.")] = False,
+    verbose: Annotated[
+        int, typer.Option("--verbose", "-v", count=True, help="More logging (-v, -vv).")
+    ] = 0,
+) -> None:
+    """Render a saved report as HTML or in the terminal (no key, no network, no execution)."""
+    configure_logging(verbose)
+    err = make_console(no_color=no_color, stderr=True)
+    try:
+        code = _report(report_file, fmt, output, no_color)
     except FlightCheckError as exc:
         render_error(err, exc)
         code = exc.exit_code

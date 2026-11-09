@@ -89,11 +89,50 @@ def test_unknown_rule_exits_two_with_valid_ids(tmp_path: Path) -> None:
     assert "FC-BC-999" in out and "FC-BC-001" in out and "FC-BC-008" in out
 
 
-@pytest.mark.parametrize("fmt", ["html", "all"])
-def test_html_format_is_phase_9(tmp_path: Path, fmt: str) -> None:
-    code, out = _scan(str(RULES), "--format", fmt, "--output", str(tmp_path))
-    assert code == 2
-    assert "HTML report arrives in Phase 9" in out
+def test_html_format_writes_json_and_html_and_prints_paths(tmp_path: Path) -> None:
+    """Phase 9 (ADR-032): ``html`` = JSON + HTML, both paths printed, no tables."""
+    code, out = _scan(str(RULES), "--format", "html", "--output", str(tmp_path))
+    assert code == 1, out  # exit codes do not depend on the format
+    lines = out.splitlines()
+    assert lines[0] == f"Report written: {tmp_path / REPORT_FILENAME}"
+    assert lines[1] == f"HTML report written: {tmp_path / 'flightcheck-report.html'}"
+    assert len(lines) == 2 and "FC-BC-001" not in out
+    html = (tmp_path / "flightcheck-report.html").read_text(encoding="utf-8")
+    assert html.startswith("<!doctype html>") and "FC-BC-001" in html
+    assert str(REPO_ROOT) not in html
+
+
+def test_all_format_prints_tables_and_writes_both(tmp_path: Path) -> None:
+    code, out = _scan(str(RULES / "FC-BC-001"), "--format", "all", "--output", str(tmp_path))
+    assert code == 1, out
+    assert "FlightCheck 0.1.0 · scan" in out and "FC-BC-001" in out
+    assert f"HTML report written: {tmp_path / 'flightcheck-report.html'}" in out
+    assert out.rstrip().splitlines()[-1].startswith("Exit 1 (findings ≥ high).")
+    assert (tmp_path / REPORT_FILENAME).is_file()
+    assert (tmp_path / "flightcheck-report.html").is_file()
+
+
+def test_terminal_format_writes_no_html(tmp_path: Path) -> None:
+    _scan(str(RULES / "FC-BC-001"), "--output", str(tmp_path))
+    assert not (tmp_path / "flightcheck-report.html").exists()
+
+
+def test_exit_line_names_explain_only_when_there_is_something_to_explain(
+    tmp_path: Path,
+) -> None:
+    """ADR-025 item 5 / ADR-032: the explain hint names the written report."""
+    target = RULES / "FC-BC-001"
+    code, out = _scan(str(target), "--fail-on", "none", "--output", str(tmp_path))
+    report_path = tmp_path / REPORT_FILENAME
+    assert (
+        f"Exit 0 (--fail-on none). Next: flightcheck test {target} --allow-exec · "
+        f"flightcheck explain {report_path}"
+    ) in out
+    good = RULES / "FC-BC-001" / "good_store_false.py"
+    code, out = _scan(str(good), "--rule", "FC-BC-001", "--output", str(tmp_path / "g"))
+    assert code == 0 and "No findings" in out
+    assert "flightcheck explain" not in out
+    assert f"Next: flightcheck test {good} --allow-exec" in out
 
 
 def test_empty_directory_exits_zero_with_notice(tmp_path: Path) -> None:

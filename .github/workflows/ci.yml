@@ -38,8 +38,11 @@ jobs:
       - name: Tests
         run: pytest -m "not live" -q
 
-      - name: Evaluation gates
-        run: python scripts/eval_fixtures.py --check
+      - name: Evaluation gates (static and runtime)
+        run: python scripts/eval_fixtures.py --check --runtime
+
+      - name: Dogfood (FlightCheck scans its own source)
+        run: flightcheck scan src --fail-on low --output "$RUNNER_TEMP/flightcheck-dogfood"
 
       - name: CLI smoke test
         run: flightcheck --version

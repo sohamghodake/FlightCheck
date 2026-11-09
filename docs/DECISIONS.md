@@ -850,3 +850,94 @@ Format:
 - Consequences: Phase 9 renders `ai_suggestions` in HTML. ADR-025 item 5 (an `explain` hint in
   `scan`/`test` exit lines) is not applied in this phase, so the other commands' output is
   unchanged; it can be added with Phase 9's CLI work.
+
+## ADR-021 — The HTML report has no JavaScript
+
+- Date: 2026-11-09 · Phase: 9 · Status: accepted
+- Context: The HTML report is the file users share (CI artifacts, e-mail, PR links). It holds
+  redacted source excerpts, traffic bodies and AI text from a model. Any script would be one
+  more place where a crafted string could execute, and external assets (fonts, CDNs) would
+  leak that a report was opened and break offline viewing (plan §24).
+- Decision: `reporting/templates/report.html.j2` renders one self-contained file: inline CSS
+  only, no `<script>`, no inline event handlers, no `<link>`, no `src=`, no `@import`, no
+  `url(http…)`. Interaction uses native `<details>` elements and in-page anchors. Jinja2 runs
+  with `autoescape=True` and `StrictUndefined`; no value is marked `|safe`. Only `http(s)`
+  `doc_url`s become links (autoescape does not stop `javascript:` URLs). Light and dark colour
+  schemes come from `prefers-color-scheme`; statuses and severities are shown as text in a
+  badge, never by colour alone.
+- Consequences: no client-side sorting or filtering. `tests/unit/test_html_report.py` asserts
+  the forbidden tokens are absent and that `<script>` planted in a message, an excerpt, a path,
+  traffic, an AI summary, a fix step, a diff and the options is escaped.
+
+## ADR-032 — Phase 9 conventions: HTML output, `report` command, CI and the dogfood fix
+
+- Date: 2026-11-09 · Phase: 9 · Status: accepted
+- Context: The plan leaves open what `--format html|all` prints and writes (ADR-025 deferred
+  it), the `report` command's defaults, how the template gets its data, how the dogfood gate
+  is made to pass, how the example workflow avoids breaking this repository's CI, and the
+  `explain` hint deferred by ADR-031.
+- Decision:
+  1. **Formats on `scan`/`test`/`explain`.** The JSON is always written. `terminal` prints the
+     tables (unchanged); `json` prints only `Report written: <path>` (unchanged); `html`
+     writes the JSON and the HTML and prints `Report written: …` then `HTML report written: …`
+     (and `Traffic written: …` between them for `test --keep-traffic`), no tables; `all`
+     prints the terminal output, then `HTML report written: …` before the exit line. File
+     names: `flightcheck-report.html` next to `flightcheck-report.json` (in `--output DIR` or
+     `PATH/.flightcheck/`); for `explain`, the explained JSON path with its suffix replaced by
+     `.html` (`<stem>.explained.html` by default; `custom.html` as `--output` gives
+     `custom.html.html`, never the JSON itself). An HTML target that resolves to the input
+     report exits 2 before anything is written. `explain --dry-run` and "Nothing to explain"
+     write no HTML. Exit codes never depend on the format.
+  2. **`flightcheck report REPORT.json`.** `--format html` (default) | `terminal` |
+     `markdown` (exits 2: "P1, not implemented"). `--output FILE` (default `<report-stem>.html`
+     next to the input; a directory, or a path resolving to the input, exits 2; with
+     `--format terminal` it is a usage error). `terminal` reuses `render_test` when
+     `metadata.command == "test"` or the report has scenarios, otherwise `render_scan`, then
+     `render_explain` when `ai_suggestions` exist; no exit line (it never gates). No key, no
+     network, no execution. Exit 0 on success; 2 for an unreadable report, a non-report, an
+     invalid report or a newer schema major (`read_report` raises `ConfigError`); 3 internal.
+  3. **View model.** `html_report.build_view(report)` starts from
+     `redact_obj(report.model_dump(mode="json"))` (the JSON report's redaction pass) and
+     returns plain dicts: metadata (options as sorted `key=json` pairs), summary cards,
+     providers, capability profile, findings grouped by file in first-seen order (no location
+     → "(repository)"), scenarios (six status counts each, checks, exchanges), diagnostics, AI
+     entries and the limitations. Derived text (pretty-printed request bodies and response
+     summaries) is redacted again. Summary cards come from `report.summary`: all five
+     severities, finding kinds static/runtime, hypotheses in their own card, all six check
+     statuses (worst first), and findings/checks per verification level labelled "static",
+     "observed with mock", "observed live" (hypotheses excluded from the findings column). AI
+     suggestions are never counted in the cards. Request headers are not shown. Size guards:
+     messages and remediations ≤ 4 000 characters, each traffic body ≤ 4 000, stdout/stderr
+     ≤ 8 000. The footer shows `metadata.generated_at` (UTC), never the wall clock, so the same
+     JSON renders the same bytes. AI provenance: `fake` → "fake LLM, offline; not generated by
+     BharatCode"; `bharatcode` → "BharatCode <model>"; fallbacks show the reason, the
+     terminal's hint for it (`FALLBACK_HINTS`) and the deterministic remediation.
+  4. **Dogfood fix (TRAP 1).** `flightcheck scan src --fail-on low` reported FC-GEN-004 twice
+     in `mock/app.py`: the parser's raw-HTTP detection treats any `<x>.post(url)` whose URL
+     contains `/responses` or `/chat/completions` as an outgoing request, and FastAPI's
+     `@app.post(f"{base}/responses")` route decorators matched. A decorator call registers a
+     handler; it never sends a request. `scanner/parser.py` now records the `Call` nodes in a
+     function's `decorator_list` and skips them in the raw `.post` branch only (SDK suffix
+     calls are unchanged). No exclusion was added and `--fail-on` was not lowered.
+     `eval_fixtures.py --check` stays 108/108 with `expected_findings.json` unchanged.
+     Regression test: `tests/scanner/test_parser.py::test_route_decorator_post_is_not_an_api_call_phase9`.
+  5. **CI.** `ci.yml` runs `python scripts/eval_fixtures.py --check --runtime` (was `--check`)
+     and the dogfood step `flightcheck scan src --fail-on low --output "$RUNNER_TEMP/…"` (so
+     the checkout stays clean). Action majors stay as in ADR-008.
+     `.github/workflows/flightcheck-example.yml` is `workflow_dispatch`-only (input `path`,
+     default `src`): a scan of `.` in this repository exits 1 because the fixture apps are
+     deliberately broken. It runs `flightcheck scan "$PATH_TO_SCAN" --format all --fail-on
+     high` and uploads `.flightcheck/` with `actions/upload-artifact@v6` (`if: always()`,
+     `include-hidden-files: true` because the directory is a dot-directory). The
+     upload-artifact major was **not verified** in this phase (no `gh` CLI, no web access per
+     the phase prompt); confirm it on its releases page before the first dispatch and add it to
+     ADR-008's table. docs/CI.md explains how users change the trigger, install step and path.
+  6. **Exit-line hint (ADR-025 item 5, ADR-031).** `scan` and `test` exit lines add
+     `flightcheck explain <report path>` (shell-quoted) when the report has something to
+     explain (a finding of any kind, or a `needs_review` check); otherwise the hint is omitted
+     because `explain` would print "Nothing to explain". `--format json|html` print no exit
+     line (unchanged).
+- Consequences: `report.html.j2` ships as package data with hatchling's
+  `packages = ["src/flightcheck"]` (checked with `uv build --wheel` and `unzip -l`); no
+  `pyproject.toml` change. ADR-025 item 1's "`--format html|all` exits 2" and ADR-031 item
+  11's same sentence are superseded by item 1 here.

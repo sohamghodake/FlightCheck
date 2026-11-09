@@ -352,6 +352,9 @@ class _IndexVisitor(ast.NodeVisitor):
         self.pending: list[_Pending] = []
         self.inline: dict[int, ClientBinding] = {}  # id(ctor Call node) -> binding
         self.call_nodes: dict[int, CallSite] = {}  # id(Call node) -> call site
+        # id(Call node) of function decorators, e.g. FastAPI's ``@app.post("/responses")``: a
+        # route registration, never an outgoing request (ADR-032).
+        self.decorator_calls: set[int] = set()
         self.active_loops: list[StreamLoop] = []
         self.index.module_facts = FunctionFacts(
             qualname=MODULE_SCOPE,
@@ -545,6 +548,8 @@ class _IndexVisitor(ast.NodeVisitor):
 
     def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
         for decorator in node.decorator_list:
+            if isinstance(decorator, ast.Call):
+                self.decorator_calls.add(id(decorator))
             self.visit(decorator)
         self.visit(node.args)
         if node.returns is not None:
@@ -971,7 +976,7 @@ class _IndexVisitor(ast.NodeVisitor):
                 receiver_attrs = attrs[: -len(suffix)]
                 break
         url: str | None = None
-        if kind is None and attrs and attrs[-1] == "post":
+        if kind is None and attrs and attrs[-1] == "post" and id(node) not in self.decorator_calls:
             url_node = node.args[0] if node.args else None
             for kw in node.keywords:
                 if kw.arg == "url":
