@@ -93,8 +93,8 @@ The commit column names the phase commit by its message; find its hash with
   `python scripts/eval_fixtures.py --check --runtime` and the dogfood
   `flightcheck scan src --fail-on low` on 3.11/3.12/3.13);
   `.github/workflows/flightcheck-example.yml` is manual-only (`workflow_dispatch`; docs/CI.md).
-  Everything through G3 is pushed and CI is green on GitHub (Python 3.11/3.12/3.13; confirmed
-  by the developer, 2026-11-18). G4 is committed locally, not pushed.
+  Everything through G4 is pushed and CI is green on GitHub (Python 3.11/3.12/3.13; confirmed
+  by the developer, 2026-11-18).
 - Security and architecture (Phase 11): `tests/security` (leak matrix over every output,
   no-execution, path traversal, keys in `flightcheck.toml`, scan redaction) and
   `tests/architecture/test_imports.py` (ADR-034; orchestrator → mock allowed). `core.redact`
