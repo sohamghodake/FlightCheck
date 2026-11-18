@@ -5,7 +5,9 @@ separate process started from the configured ``[test].command`` list: never ``sh
 never an in-process import. Callers must call :func:`ensure_consent` first.
 
 The child gets a scrubbed environment (:func:`build_child_env`): an allowlist of variables, the
-mock URL in every ``base_url_env`` variable, a fake key in every ``api_key_env`` variable, and an
+mock URL in every ``base_url_env`` variable (``GROQ_BASE_URL`` gets the mock root, because the
+groq SDK adds ``/openai/v1`` itself: contract K3/K4), a fake key in every ``api_key_env``
+variable, ``GROQ_API_KEY``/``GROQ_BASE_URL`` never inherited from the parent (ADR-038), and an
 egress guard (``HTTP_PROXY``/``HTTPS_PROXY`` → an unused local port, ``NO_PROXY`` for
 127.0.0.1/localhost). The guard is best effort, **not a sandbox**: it only stops HTTP clients
 that honour the proxy variables (httpx2 and the OpenAI SDK do, with their default
@@ -26,7 +28,7 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import IO
 
-from flightcheck.core.config import TestConfig
+from flightcheck.core.config import GROQ_API_KEY_ENV, GROQ_BASE_URL_ENV, TestConfig
 from flightcheck.core.errors import ConsentRequiredError, FlightCheckError
 from flightcheck.core.models import AppRun
 from flightcheck.core.paths import resolve_inside
@@ -54,6 +56,10 @@ ENV_ALLOWLIST = (
     "PYTHONPATH",
 )
 LOCAL_NO_PROXY = "127.0.0.1,localhost"
+# Never inherited, whatever the allowlist says (ADR-038, contract §4.9): the groq SDK reads them
+# (K3), so a real key or the real host must not reach any child. They reach the child only as
+# the fake key / the mock URL, and only when [test] names them.
+ALWAYS_SCRUBBED = (GROQ_API_KEY_ENV, GROQ_BASE_URL_ENV)
 _PROXY_NAMES = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY")
 _IS_WINDOWS = os.name == "nt"
 
@@ -95,20 +101,28 @@ def build_child_env(
     *,
     guard_port: int | None = None,
     parent_cwd: Path | None = None,
+    mock_root: str | None = None,
 ) -> dict[str, str]:
-    """The child's whole environment (§20.7): allowlist → overrides → egress guard.
+    """The child's whole environment (§20.7): allowlist → scrub → overrides → egress guard.
 
     Everything not on the allowlist is dropped (API keys, cloud credentials, tokens, inherited
-    proxies in any case). The guard is applied last, so a ``base_url_env``/``api_key_env`` entry
-    cannot switch it off. Relative ``PATH`` entries (``PATH=.venv/bin:$PATH``) are made absolute
-    against FlightCheck's own working directory (``parent_cwd``), where the user typed them;
-    the child runs in ``[test].cwd``, where they would point elsewhere.
+    proxies in any case), and ``GROQ_API_KEY``/``GROQ_BASE_URL`` are removed explicitly
+    (:data:`ALWAYS_SCRUBBED`). ``mock_url`` goes into every ``base_url_env`` variable except
+    ``GROQ_BASE_URL``, which gets ``mock_root`` (the mock's origin; the groq SDK appends
+    ``/openai/v1``, contract K4); without ``mock_root`` it gets ``mock_url``. The guard is
+    applied last, so a ``base_url_env``/``api_key_env`` entry cannot switch it off. Relative
+    ``PATH`` entries (``PATH=.venv/bin:$PATH``) are made absolute against FlightCheck's own
+    working directory (``parent_cwd``), where the user typed them; the child runs in
+    ``[test].cwd``, where they would point elsewhere.
     """
     env: dict[str, str] = {}
     for name in ENV_ALLOWLIST:
         value = parent_env.get(name)
         if value:
             env[name] = value
+    for name in list(env):
+        if name.upper() in ALWAYS_SCRUBBED:
+            del env[name]
     if "PATH" in env:
         base = Path.cwd() if parent_cwd is None else parent_cwd
         env["PATH"] = os.pathsep.join(
@@ -117,7 +131,8 @@ def build_child_env(
         )
     env["PYTHONIOENCODING"] = "utf-8"
     for name in test_config.base_url_env:
-        env[name] = mock_url
+        root_url = mock_root if name == GROQ_BASE_URL_ENV else None
+        env[name] = root_url if root_url is not None else mock_url
     for name in test_config.api_key_env:
         env[name] = fake_key
     for name in list(env):

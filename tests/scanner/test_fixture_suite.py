@@ -35,6 +35,15 @@ P0_APPS = {
     "bc_bad_hardcoded_base_url",
     "known_fp_helper_check",
 }
+# Groq fixture apps (phase G4, ADR-038): Groq call sites, run as Groq by `flightcheck test`.
+GROQ_APPS = {
+    "groq_good_chat_stream",
+    "groq_good_responses_http",
+    "groq_bad_stateful",
+    "groq_bad_builtin_tools",
+    "groq_bad_stream",
+    "groq_bad_no_resilience",
+}
 
 
 def _scan(app: str) -> Report:
@@ -53,7 +62,7 @@ def _observed(report: Report) -> dict[str, list[dict[str, object]]]:
 
 def test_every_p0_app_is_in_the_manifest_and_on_disk() -> None:
     on_disk = {p.name for p in APPS_ROOT.iterdir() if p.is_dir()}
-    assert on_disk == set(APPS) == P0_APPS
+    assert on_disk == set(APPS) == P0_APPS | GROQ_APPS
 
 
 @pytest.mark.parametrize("app", sorted(APPS))
@@ -75,7 +84,13 @@ def test_clean_apps_have_no_non_info_findings(app: str) -> None:
 
 def test_clean_flags_match_plan() -> None:
     clean = {app for app, item in APPS.items() if item["clean"]}
-    assert clean == {"bc_good_responses_tools", "bc_good_chat_stream", "openai_plain"}
+    assert clean == {
+        "bc_good_responses_tools",
+        "bc_good_chat_stream",
+        "openai_plain",
+        "groq_good_chat_stream",
+        "groq_good_responses_http",
+    }
 
 
 @pytest.mark.parametrize("app", sorted(APPS))
@@ -84,14 +99,23 @@ def test_app_is_a_real_program(app: str) -> None:
     tree = ast.parse(source)
     assert 'if __name__ == "__main__":' in source
     assert "sys.argv[1]" in source
-    assert "from openai import OpenAI" in source
     assert any(isinstance(node, ast.FunctionDef) and node.name == "main" for node in tree.body)
+    if app in GROQ_APPS:
+        # Groq apps read the key from GROQ_API_KEY; the raw-HTTP one uses httpx2 with the groq
+        # SDK's URL layout (root base URL from GROQ_BASE_URL), the others the OpenAI SDK.
+        assert "os.environ['GROQ_API_KEY']" in source or 'os.environ["GROQ_API_KEY"]' in source
+        if app == "groq_good_responses_http":
+            assert "import httpx2" in source and '"GROQ_BASE_URL"' in source
+        else:
+            assert "from openai import OpenAI" in source and '"GROQ_OPENAI_BASE_URL"' in source
+        return
+    assert "from openai import OpenAI" in source
     if app != "openai_plain":
         assert 'os.environ["BHARATCODE_API_KEY"]' in source or app == "bc_bad_secrets"
         assert 'os.environ["BHARATCODE_BASE_URL"]' in source or app == ("bc_bad_hardcoded_base_url")
 
 
-@pytest.mark.parametrize("app", sorted(a for a in APPS if a.startswith("bc_bad_")))
+@pytest.mark.parametrize("app", sorted(a for a in APPS if a.startswith(("bc_bad_", "groq_bad_"))))
 def test_bad_apps_say_they_are_intentionally_flawed(app: str) -> None:
     assert "INTENTIONALLY FLAWED FIXTURE" in (APPS_ROOT / app / "main.py").read_text()
 

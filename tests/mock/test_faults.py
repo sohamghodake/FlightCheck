@@ -9,6 +9,7 @@ from flightcheck.mock.faults import FaultScript, MockAction, MockStep
 
 
 def test_actions_match_plan() -> None:
+    # The plan's eight actions, then TOOL_VALIDATION_ERROR (Groq, contract §4.6, phase G4).
     assert [a.value for a in MockAction] == [
         "ok_text",
         "tool_call",
@@ -18,6 +19,7 @@ def test_actions_match_plan() -> None:
         "stream_fail_after",
         "keepalive_stream",
         "delay",
+        "tool_validation_error",
     ]
 
 

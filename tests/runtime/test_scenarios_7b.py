@@ -151,7 +151,7 @@ def tool_result_body(call_id: str) -> dict[str, Any]:
 
 
 def test_catalogue_has_all_p0_scenarios_per_plan_18_3() -> None:
-    assert list(SCENARIOS) == ["S01", "S02", "S03", "S04", "S05", "S06"]
+    assert list(SCENARIOS) == ["S01", "S02", "S03", "S04", "S05", "S06", "S11"]  # S11: G4
     assert S03.check_ids == ("FC-RT-020", "FC-RT-023")
     assert S05.check_ids == ("FC-RT-022", "FC-RT-023")
     assert S06.check_ids == ("FC-RT-030",)

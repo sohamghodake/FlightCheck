@@ -5,6 +5,13 @@ Shapes follow docs/BHARATCODE_CONTRACT.md §15.1 where it is specific ("OpenAI-c
 Completions or Responses"; truncation fields) and OpenAI conventions elsewhere, carrying only
 the fields the OpenAI SDK models and FlightCheck's validators need. Everything beyond the
 documented fields is [UNVERIFIED] for BharatCode.
+
+Groq routes (``/openai/v1/...``, ADR-038) reuse the same builders and add Groq's shapes from
+docs/GROQ_CONTRACT.md: Chat bodies gain ``x_groq.id``, the ``usage`` timing fields,
+``system_fingerprint`` and ``service_tier`` (C13, C14); errors are ``{"error": {"message",
+"type"}}`` (E1, no ``code``); Chat streams carry ``x_groq`` in the first and final chunk (ST2) and
+fail with an ``x_groq.error`` chunk (ST3). No ``x-request-id`` header is sent on Groq routes
+(E10: not documented; the request ID is ``x_groq.id``).
 """
 
 from __future__ import annotations
@@ -15,7 +22,12 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from flightcheck.core.config import BHARATCODE_DEFAULT_MODEL, BHARATCODE_DOCUMENTED_MODELS
+from flightcheck.core.config import (
+    BHARATCODE_DEFAULT_MODEL,
+    BHARATCODE_DOCUMENTED_MODELS,
+    GROQ_DEFAULT_MODEL,
+    GROQ_DOCUMENTED_MODELS,
+)
 from flightcheck.mock.faults import MockAction, MockStep
 
 Headers = dict[str, str]
@@ -370,7 +382,8 @@ def error_body(status: int, message: str, code: str | None) -> dict[str, Any]:
 
 
 def http_error(request_json: dict[str, Any], step: MockStep, seq: int) -> Built:
-    """``HTTP_ERROR``: ``status`` (default 503, documented as "model busy"), message, code."""
+    """``HTTP_ERROR``: ``status`` (default 503, documented as "model busy"), message, code,
+    optional ``headers`` (``retry-after`` / ``x-ratelimit-*``, see :func:`error_headers`)."""
     status = step.params.get("status", 503)
     if isinstance(status, bool) or not isinstance(status, int) or not 400 <= status <= 599:
         raise ValueError("HTTP_ERROR step needs an integer status between 400 and 599")
@@ -378,7 +391,7 @@ def http_error(request_json: dict[str, Any], step: MockStep, seq: int) -> Built:
     if not isinstance(message, str):
         message = "Model is busy, retry in a few seconds." if status == 503 else "Mock error."
     code = step.params.get("code")
-    headers = base_headers(seq)
+    headers = {**base_headers(seq), **error_headers(step)}
     retry_after = step.params.get("retry_after")
     if retry_after is not None:
         # Whether BharatCode sends Retry-After is [UNVERIFIED]; scripts opt in.
@@ -400,6 +413,172 @@ def models_list() -> dict[str, Any]:
         "data": [
             {"id": model, "object": "model", "created": MOCK_CREATED_AT, "owned_by": "bharatcode"}
             for model in sorted(BHARATCODE_DOCUMENTED_MODELS)
+        ],
+    }
+
+
+# --- Groq shapes (ADR-038) ------------------------------------------------------------------
+
+GROQ_REQUEST_ID_PREFIX = "req_fc_mock_"  # x_groq.id; Groq's IDs look like "req_…" (C13)
+GROQ_SYSTEM_FINGERPRINT = "fp_fc_mock"  # field documented (C13); value is the mock's own
+GROQ_SERVICE_TIER = "on_demand"  # the documented default tier (C14)
+# Documented usage fields (C13), fixed mock values in seconds.
+GROQ_USAGE_TIMES = {
+    "queue_time": 0.001,
+    "prompt_time": 0.002,
+    "completion_time": 0.003,
+    "total_time": 0.006,
+}
+# OpenAI-style "type" by status. Groq documents the body shape and the type
+# "invalid_request_error" (E1) and names 498's error "capacity_exceeded" (E2); every other type
+# value is [UNVERIFIED].
+_GROQ_ERROR_TYPES = {
+    **_ERROR_TYPES,
+    413: "invalid_request_error",
+    422: "invalid_request_error",
+    498: "capacity_exceeded",
+}
+# Headers a Groq HTTP_ERROR step may set (contract E5: retry-after only on 429; E6: the six
+# x-ratelimit-* headers).
+GROQ_RATE_LIMIT_HEADERS = frozenset(
+    f"x-ratelimit-{kind}-{unit}"
+    for kind in ("limit", "remaining", "reset")
+    for unit in ("requests", "tokens")
+)
+ALLOWED_ERROR_HEADERS = GROQ_RATE_LIMIT_HEADERS | {"retry-after"}
+
+
+def groq_request_id(seq: int) -> str:
+    return f"{GROQ_REQUEST_ID_PREFIX}{seq}"
+
+
+def groq_headers(headers: Headers) -> Headers:
+    """Headers for a Groq-route answer: no ``x-request-id`` (not documented, E10)."""
+    return {k: v for k, v in headers.items() if k.lower() != "x-request-id"}
+
+
+def groq_request(request_json: dict[str, Any]) -> dict[str, Any]:
+    """The request as the builders see it on a Groq route: without a usable ``model`` the
+    answer names Groq's default model (what Groq does without one is not documented; C1 says
+    it is required)."""
+    model = request_json.get("model")
+    if isinstance(model, str) and model:
+        return request_json
+    return {**request_json, "model": GROQ_DEFAULT_MODEL}
+
+
+def groq_usage(usage: dict[str, Any]) -> dict[str, Any]:
+    return {**usage, **GROQ_USAGE_TIMES}
+
+
+def groq_chat_body(body: dict[str, Any], seq: int) -> dict[str, Any]:
+    """A Chat Completions body with Groq's documented extra fields (C13, C14)."""
+    return {
+        **body,
+        "usage": groq_usage(body["usage"]),
+        "system_fingerprint": GROQ_SYSTEM_FINGERPRINT,
+        "service_tier": GROQ_SERVICE_TIER,
+        "x_groq": {"id": groq_request_id(seq)},
+    }
+
+
+def groq_error_type_for(status: int) -> str:
+    if status in _GROQ_ERROR_TYPES:
+        return _GROQ_ERROR_TYPES[status]
+    return "server_error" if status >= 500 else "invalid_request_error"
+
+
+def groq_error_body(status: int, message: str, **extra: Any) -> dict[str, Any]:
+    """Groq's error body ``{"error": {"message", "type"}}`` (E1; no ``code`` is documented).
+    ``extra`` adds documented fields such as ``failed_generation`` (T6)."""
+    return {"error": {"message": message, "type": groq_error_type_for(status), **extra}}
+
+
+def error_headers(step: MockStep) -> Headers:
+    """The ``headers`` step parameter: ``retry-after`` and ``x-ratelimit-*`` only (E5, E6),
+    names lower-case, values strings or integers."""
+    raw = step.params.get("headers")
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError("HTTP_ERROR 'headers' must be a mapping of header names to values")
+    headers: Headers = {}
+    for name, value in raw.items():
+        if not isinstance(name, str) or name.lower() not in ALLOWED_ERROR_HEADERS:
+            raise ValueError("HTTP_ERROR 'headers' allows only retry-after and x-ratelimit-*")
+        if isinstance(value, bool) or not isinstance(value, str | int | float):
+            raise ValueError("HTTP_ERROR header values must be strings or numbers")
+        headers[name.lower()] = str(value)
+    return headers
+
+
+def _error_status(step: MockStep) -> int:
+    status = step.params.get("status", 503)
+    if isinstance(status, bool) or not isinstance(status, int) or not 400 <= status <= 599:
+        raise ValueError("HTTP_ERROR step needs an integer status between 400 and 599")
+    return status
+
+
+def groq_http_error(request_json: dict[str, Any], step: MockStep, seq: int) -> Built:
+    """``HTTP_ERROR`` on a Groq route: Groq's error body (E1) plus the step's ``headers``.
+
+    ``retry-after`` (from ``headers`` or the older ``retry_after`` parameter) is allowed only
+    with 429, the only status Groq sets it on (E5). The default 503 message says to wait, as
+    Groq's errors page does (E3); it does not claim a "model busy" cause.
+    """
+    status = _error_status(step)
+    message = step.params.get("message")
+    if not isinstance(message, str):
+        message = "Service unavailable: wait before retrying." if status == 503 else "Mock error."
+    headers = error_headers(step)
+    retry_after = step.params.get("retry_after")
+    if retry_after is not None:
+        headers.setdefault("retry-after", str(retry_after))
+    if "retry-after" in headers and status != 429:
+        raise ValueError("Groq sets retry-after only on 429 (contract E5)")
+    return status, headers, groq_error_body(status, message)
+
+
+def groq_stream_failure(request_json: dict[str, Any], step: MockStep, seq: int) -> Built:
+    """``STREAM_FAIL_AFTER`` on a non-stream Groq request: HTTP 500 ("retry later", E3)."""
+    return 500, {}, groq_error_body(500, "The model failed mid-response.")
+
+
+def groq_tool_validation_error(request_json: dict[str, Any], step: MockStep, seq: int) -> Built:
+    """``TOOL_VALIDATION_ERROR`` (P1): Groq's 400 for a generated tool call that failed
+    validation, with ``error.failed_generation`` (T6). Groq says it carries the reason, the
+    ``tool_call_id`` and the attempted arguments; its exact format is [UNVERIFIED], so the mock
+    sends a JSON string with those three parts."""
+    parts = _tool_call_parts(request_json, step, seq)
+    if parts is None:
+        name, call = "unknown_tool", call_id(scenario_of(step), seq)
+    else:
+        call, name = parts[0], parts[1]
+    attempted = json.dumps(
+        {
+            "reason": "tool call validation failed",
+            "tool_call_id": call,
+            "name": name,
+            "arguments": "{",
+        },
+        separators=(",", ":"),
+    )
+    body = groq_error_body(
+        400,
+        "Tool call validation failed (FlightCheck mock); see failed_generation.",
+        failed_generation=attempted,
+    )
+    return 400, {}, body
+
+
+def groq_models_list() -> dict[str, Any]:
+    """``GET /openai/v1/models``: the dated catalogue (§1.8). The field shape is OpenAI's and
+    [UNVERIFIED] for Groq (A6); ``owned_by`` is the mock's own value."""
+    return {
+        "object": "list",
+        "data": [
+            {"id": model, "object": "model", "created": MOCK_CREATED_AT, "owned_by": "groq"}
+            for model in sorted(GROQ_DOCUMENTED_MODELS)
         ],
     }
 
@@ -665,7 +844,12 @@ def _stream_message_partial(
         )
 
 
-def _chat_chunk(final: dict[str, Any], delta: dict[str, Any], finish_reason: str | None) -> bytes:
+def _chat_chunk(
+    final: dict[str, Any],
+    delta: dict[str, Any],
+    finish_reason: str | None,
+    extra: dict[str, Any] | None = None,
+) -> bytes:
     return sse_data(
         {
             "id": final["id"],
@@ -673,15 +857,27 @@ def _chat_chunk(final: dict[str, Any], delta: dict[str, Any], finish_reason: str
             "created": final["created"],
             "model": final["model"],
             "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+            **(extra or {}),
         }
     )
 
 
-def chat_stream(request_json: dict[str, Any], step: MockStep, seq: int) -> SSEStream:
+GROQ_STREAM_ERROR = "The model stopped the stream early (FlightCheck mock)."
+
+
+def chat_stream(
+    request_json: dict[str, Any], step: MockStep, seq: int, *, groq: bool = False
+) -> SSEStream:
     """Chat SSE: role chunk, content or tool-call deltas, a ``finish_reason`` chunk, ``[DONE]``.
 
     ``STREAM_FAIL_AFTER`` sends ``n`` content chunks and ends the body with no finish chunk and
     no ``[DONE]`` (Chat has no documented failure event).
+
+    ``groq=True`` (Groq routes): the first and final chunks carry ``x_groq.id`` and the final
+    one ``x_groq.usage`` (ST2), plus a top-level ``usage`` when the request set
+    ``stream_options.include_usage`` (ST2). ``STREAM_FAIL_AFTER`` sends the ``n`` content chunks,
+    then a chunk with ``x_groq.error`` and no choices, then ends without ``[DONE]``: the field
+    is documented (ST3), the wire format around it is [UNVERIFIED].
     """
     action = step.action
     kind = _STREAM_KIND.get(action, "text")
@@ -690,10 +886,20 @@ def chat_stream(request_json: dict[str, Any], step: MockStep, seq: int) -> SSESt
     message = choice["message"]
     tool_calls = message.get("tool_calls") or []
     chunks: list[bytes] = []
+    first: dict[str, Any] | None = None
+    last: dict[str, Any] | None = None
+    if groq:
+        rid = groq_request_id(seq)
+        first = {"x_groq": {"id": rid}}
+        usage = groq_usage(final["usage"])
+        last = {"x_groq": {"id": rid, "usage": usage}}
+        options = request_json.get("stream_options")
+        if isinstance(options, dict) and options.get("include_usage") is True:
+            last["usage"] = usage
 
     if action is MockAction.STREAM_FAIL_AFTER:
         pieces = text_pieces(answer_text(step))[: fail_after(step)]
-        chunks.append(_chat_chunk(final, {"role": "assistant", "content": ""}, None))
+        chunks.append(_chat_chunk(final, {"role": "assistant", "content": ""}, None, first))
         chunks.extend(_chat_chunk(final, {"content": p}, None) for p in pieces)
         outcome: dict[str, Any] = {
             "finish": "eof_without_done",
@@ -701,6 +907,20 @@ def chat_stream(request_json: dict[str, Any], step: MockStep, seq: int) -> SSESt
             "deltas": len(pieces),
             "done_sent": False,
         }
+        if groq:
+            chunks.append(
+                sse_data(
+                    {
+                        "id": final["id"],
+                        "object": "chat.completion.chunk",
+                        "created": final["created"],
+                        "model": final["model"],
+                        "choices": [],
+                        "x_groq": {"id": groq_request_id(seq), "error": GROQ_STREAM_ERROR},
+                    }
+                )
+            )
+            outcome["finish"] = "x_groq_error"
     else:
         if tool_calls:
             call = tool_calls[0]
@@ -716,15 +936,15 @@ def chat_stream(request_json: dict[str, Any], step: MockStep, seq: int) -> SSESt
                     }
                 ],
             }
-            chunks.append(_chat_chunk(final, opening, None))
+            chunks.append(_chat_chunk(final, opening, None, first))
             for piece in argument_pieces(call["function"]["arguments"]):
                 delta = {"tool_calls": [{"index": 0, "function": {"arguments": piece}}]}
                 chunks.append(_chat_chunk(final, delta, None))
         else:
-            chunks.append(_chat_chunk(final, {"role": "assistant", "content": ""}, None))
+            chunks.append(_chat_chunk(final, {"role": "assistant", "content": ""}, None, first))
             for piece in text_pieces(message["content"]):
                 chunks.append(_chat_chunk(final, {"content": piece}, None))
-        chunks.append(_chat_chunk(final, {}, choice["finish_reason"]))
+        chunks.append(_chat_chunk(final, {}, choice["finish_reason"], last))
         chunks.append(DONE)
         truncated = choice["finish_reason"] == "length"
         if tool_calls:

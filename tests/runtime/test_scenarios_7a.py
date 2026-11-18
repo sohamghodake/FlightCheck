@@ -75,7 +75,8 @@ def no_execution(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_catalogue_matches_plan_18_3() -> None:
-    assert list(SCENARIOS) == ["S01", "S02", "S03", "S04", "S05", "S06"]  # S03/S05/S06: 7B
+    # S03/S05/S06: 7B; S11 (Groq runs only): G4.
+    assert list(SCENARIOS) == ["S01", "S02", "S03", "S04", "S05", "S06", "S11"]
     assert S02.check_ids == ("FC-RT-040", "FC-RT-041")
     assert S04.check_ids == ("FC-RT-011", "FC-RT-012", "FC-RT-013", "FC-RT-014")
     assert S01.all_check_ids == ("FC-RT-008", *EVERY_SCENARIO_CHECK_IDS)
@@ -217,8 +218,11 @@ def test_expected_runtime_covers_every_fixture_app() -> None:
 @pytest.mark.slow
 @pytest.mark.parametrize("app_name", sorted(EXPECTED["apps"]))
 def test_fixture_app_runtime_expectations(app_name: str) -> None:
-    report = run(APPS / app_name, SCENARIO_IDS)
-    assert _statuses(report) == EXPECTED["apps"][app_name]
+    # Groq apps list their own scenarios (S01–S06 plus S11, ADR-038); the rest use the default.
+    expected = dict(EXPECTED["apps"][app_name])
+    scenarios = expected.pop("scenarios", SCENARIO_IDS)
+    report = run(APPS / app_name, scenarios)
+    assert _statuses(report) == expected
     for scenario in report.scenarios:
         for check in scenario.checks:
             if check.status is CheckStatus.PASSED:

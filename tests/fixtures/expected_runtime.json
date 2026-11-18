@@ -1,5 +1,5 @@
 {
-  "_comment": "Runtime expectations per fixture app (plan §25.1, §27 Phase 7A/7B item 14) for scenarios S01–S06 against the mock, with no [test.expect] (so FC-RT-020/030 are needs_review unless a check is skipped). Asserted by tests/runtime/test_scenarios_7a.py and scripts/eval_fixtures.py --runtime. Contract checks FC-RT-001…007 and FC-RT-050/060 are reported once per run (ADR-029), so they appear under the first scenario only.",
+  "_comment": "Runtime expectations per fixture app (plan §25.1, §27 Phase 7A/7B item 14) for scenarios S01–S06 against the mock, with no [test.expect] (so FC-RT-020/030 are needs_review unless a check is skipped). Asserted by tests/runtime/test_scenarios_7a.py and scripts/eval_fixtures.py --runtime. Contract checks FC-RT-001…007 and FC-RT-050/060 are reported once per run (ADR-029), so they appear under the first scenario only. Groq apps (phase G4, ADR-038) run as Groq: their entries list their own 'scenarios' (S01–S06 plus S11) and their every-scenario checks are FC-RT-002, 006, 007, 009, 015, 050, 060.",
   "root": "tests/fixtures/apps",
   "scenarios": [
     "S01",
@@ -619,6 +619,415 @@
         "status": "needs_review",
         "checks": {
           "FC-RT-030": "needs_review"
+        }
+      },
+      "runtime_findings": []
+    },
+    "groq_bad_builtin_tools": {
+      "scenarios": [
+        "S01",
+        "S02",
+        "S03",
+        "S04",
+        "S05",
+        "S06",
+        "S11"
+      ],
+      "S01": {
+        "status": "failed",
+        "checks": {
+          "FC-RT-008": "passed",
+          "FC-RT-002": "skipped",
+          "FC-RT-006": "passed",
+          "FC-RT-007": "passed",
+          "FC-RT-009": "skipped",
+          "FC-RT-015": "failed",
+          "FC-RT-050": "passed",
+          "FC-RT-060": "passed"
+        }
+      },
+      "S02": {
+        "status": "needs_review",
+        "checks": {
+          "FC-RT-040": "passed",
+          "FC-RT-041": "needs_review"
+        }
+      },
+      "S03": {
+        "status": "needs_review",
+        "checks": {
+          "FC-RT-020": "needs_review",
+          "FC-RT-023": "passed"
+        }
+      },
+      "S04": {
+        "status": "unsupported",
+        "checks": {
+          "FC-RT-011": "unsupported",
+          "FC-RT-012": "unsupported",
+          "FC-RT-013": "unsupported",
+          "FC-RT-014": "unsupported"
+        }
+      },
+      "S05": {
+        "status": "passed",
+        "checks": {
+          "FC-RT-022": "unsupported",
+          "FC-RT-023": "passed"
+        }
+      },
+      "S06": {
+        "status": "needs_review",
+        "checks": {
+          "FC-RT-030": "needs_review"
+        }
+      },
+      "S11": {
+        "status": "passed",
+        "checks": {
+          "FC-RT-044": "passed"
+        }
+      },
+      "runtime_findings": [
+        "FC-RT-015"
+      ]
+    },
+    "groq_bad_no_resilience": {
+      "scenarios": [
+        "S01",
+        "S02",
+        "S03",
+        "S04",
+        "S05",
+        "S06",
+        "S11"
+      ],
+      "S01": {
+        "status": "passed",
+        "checks": {
+          "FC-RT-008": "passed",
+          "FC-RT-002": "skipped",
+          "FC-RT-006": "passed",
+          "FC-RT-007": "passed",
+          "FC-RT-009": "skipped",
+          "FC-RT-015": "passed",
+          "FC-RT-050": "passed",
+          "FC-RT-060": "passed"
+        }
+      },
+      "S02": {
+        "status": "failed",
+        "checks": {
+          "FC-RT-040": "passed",
+          "FC-RT-041": "failed"
+        }
+      },
+      "S03": {
+        "status": "needs_review",
+        "checks": {
+          "FC-RT-020": "needs_review",
+          "FC-RT-023": "passed"
+        }
+      },
+      "S04": {
+        "status": "unsupported",
+        "checks": {
+          "FC-RT-011": "unsupported",
+          "FC-RT-012": "unsupported",
+          "FC-RT-013": "unsupported",
+          "FC-RT-014": "unsupported"
+        }
+      },
+      "S05": {
+        "status": "passed",
+        "checks": {
+          "FC-RT-022": "unsupported",
+          "FC-RT-023": "passed"
+        }
+      },
+      "S06": {
+        "status": "needs_review",
+        "checks": {
+          "FC-RT-030": "needs_review"
+        }
+      },
+      "S11": {
+        "status": "failed",
+        "checks": {
+          "FC-RT-044": "failed"
+        }
+      },
+      "runtime_findings": [
+        "FC-RT-041",
+        "FC-RT-044"
+      ]
+    },
+    "groq_bad_stateful": {
+      "scenarios": [
+        "S01",
+        "S02",
+        "S03",
+        "S04",
+        "S05",
+        "S06",
+        "S11"
+      ],
+      "S01": {
+        "status": "failed",
+        "checks": {
+          "FC-RT-008": "needs_review",
+          "FC-RT-002": "passed",
+          "FC-RT-006": "passed",
+          "FC-RT-007": "passed",
+          "FC-RT-009": "failed",
+          "FC-RT-015": "passed",
+          "FC-RT-050": "passed",
+          "FC-RT-060": "passed"
+        }
+      },
+      "S02": {
+        "status": "skipped",
+        "checks": {
+          "FC-RT-040": "skipped",
+          "FC-RT-041": "skipped"
+        }
+      },
+      "S03": {
+        "status": "skipped",
+        "checks": {
+          "FC-RT-020": "skipped",
+          "FC-RT-023": "skipped"
+        }
+      },
+      "S04": {
+        "status": "skipped",
+        "checks": {
+          "FC-RT-011": "skipped",
+          "FC-RT-012": "skipped",
+          "FC-RT-013": "skipped",
+          "FC-RT-014": "skipped"
+        }
+      },
+      "S05": {
+        "status": "skipped",
+        "checks": {
+          "FC-RT-022": "skipped",
+          "FC-RT-023": "skipped"
+        }
+      },
+      "S06": {
+        "status": "skipped",
+        "checks": {
+          "FC-RT-030": "skipped"
+        }
+      },
+      "S11": {
+        "status": "skipped",
+        "checks": {
+          "FC-RT-044": "skipped"
+        }
+      },
+      "runtime_findings": [
+        "FC-RT-009"
+      ]
+    },
+    "groq_bad_stream": {
+      "scenarios": [
+        "S01",
+        "S02",
+        "S03",
+        "S04",
+        "S05",
+        "S06",
+        "S11"
+      ],
+      "S01": {
+        "status": "passed",
+        "checks": {
+          "FC-RT-008": "passed",
+          "FC-RT-002": "skipped",
+          "FC-RT-006": "passed",
+          "FC-RT-007": "passed",
+          "FC-RT-009": "skipped",
+          "FC-RT-015": "passed",
+          "FC-RT-050": "passed",
+          "FC-RT-060": "passed"
+        }
+      },
+      "S02": {
+        "status": "needs_review",
+        "checks": {
+          "FC-RT-040": "passed",
+          "FC-RT-041": "needs_review"
+        }
+      },
+      "S03": {
+        "status": "needs_review",
+        "checks": {
+          "FC-RT-020": "needs_review",
+          "FC-RT-023": "passed"
+        }
+      },
+      "S04": {
+        "status": "unsupported",
+        "checks": {
+          "FC-RT-011": "unsupported",
+          "FC-RT-012": "unsupported",
+          "FC-RT-013": "unsupported",
+          "FC-RT-014": "unsupported"
+        }
+      },
+      "S05": {
+        "status": "passed",
+        "checks": {
+          "FC-RT-022": "unsupported",
+          "FC-RT-023": "passed"
+        }
+      },
+      "S06": {
+        "status": "needs_review",
+        "checks": {
+          "FC-RT-030": "needs_review"
+        }
+      },
+      "S11": {
+        "status": "passed",
+        "checks": {
+          "FC-RT-044": "passed"
+        }
+      },
+      "runtime_findings": []
+    },
+    "groq_good_chat_stream": {
+      "scenarios": [
+        "S01",
+        "S02",
+        "S03",
+        "S04",
+        "S05",
+        "S06",
+        "S11"
+      ],
+      "S01": {
+        "status": "passed",
+        "checks": {
+          "FC-RT-008": "passed",
+          "FC-RT-002": "skipped",
+          "FC-RT-006": "passed",
+          "FC-RT-007": "passed",
+          "FC-RT-009": "skipped",
+          "FC-RT-015": "passed",
+          "FC-RT-050": "passed",
+          "FC-RT-060": "passed"
+        }
+      },
+      "S02": {
+        "status": "needs_review",
+        "checks": {
+          "FC-RT-040": "passed",
+          "FC-RT-041": "needs_review"
+        }
+      },
+      "S03": {
+        "status": "needs_review",
+        "checks": {
+          "FC-RT-020": "needs_review",
+          "FC-RT-023": "passed"
+        }
+      },
+      "S04": {
+        "status": "passed",
+        "checks": {
+          "FC-RT-011": "passed",
+          "FC-RT-012": "passed",
+          "FC-RT-013": "passed",
+          "FC-RT-014": "passed"
+        }
+      },
+      "S05": {
+        "status": "passed",
+        "checks": {
+          "FC-RT-022": "passed",
+          "FC-RT-023": "passed"
+        }
+      },
+      "S06": {
+        "status": "needs_review",
+        "checks": {
+          "FC-RT-030": "needs_review"
+        }
+      },
+      "S11": {
+        "status": "passed",
+        "checks": {
+          "FC-RT-044": "passed"
+        }
+      },
+      "runtime_findings": []
+    },
+    "groq_good_responses_http": {
+      "scenarios": [
+        "S01",
+        "S02",
+        "S03",
+        "S04",
+        "S05",
+        "S06",
+        "S11"
+      ],
+      "S01": {
+        "status": "passed",
+        "checks": {
+          "FC-RT-008": "passed",
+          "FC-RT-002": "passed",
+          "FC-RT-006": "passed",
+          "FC-RT-007": "passed",
+          "FC-RT-009": "passed",
+          "FC-RT-015": "passed",
+          "FC-RT-050": "passed",
+          "FC-RT-060": "passed"
+        }
+      },
+      "S02": {
+        "status": "passed",
+        "checks": {
+          "FC-RT-040": "passed",
+          "FC-RT-041": "passed"
+        }
+      },
+      "S03": {
+        "status": "needs_review",
+        "checks": {
+          "FC-RT-020": "needs_review",
+          "FC-RT-023": "passed"
+        }
+      },
+      "S04": {
+        "status": "passed",
+        "checks": {
+          "FC-RT-011": "passed",
+          "FC-RT-012": "passed",
+          "FC-RT-013": "passed",
+          "FC-RT-014": "passed"
+        }
+      },
+      "S05": {
+        "status": "passed",
+        "checks": {
+          "FC-RT-022": "passed",
+          "FC-RT-023": "passed"
+        }
+      },
+      "S06": {
+        "status": "needs_review",
+        "checks": {
+          "FC-RT-030": "needs_review"
+        }
+      },
+      "S11": {
+        "status": "passed",
+        "checks": {
+          "FC-RT-044": "passed"
         }
       },
       "runtime_findings": []

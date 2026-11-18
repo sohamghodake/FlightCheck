@@ -7,7 +7,8 @@ non-info finding count on clean fixtures, and the dogfood scan of ``src/``.
 
     python scripts/eval_fixtures.py            # print the summary and write docs/EVALUATION.md
     python scripts/eval_fixtures.py --check    # print the summary; exit 1 if a §26.2 gate fails
-    python scripts/eval_fixtures.py --runtime  # also run every fixture app (S01–S06) on the mock
+    python scripts/eval_fixtures.py --runtime  # also run every fixture app (S01–S06; Groq apps
+                                               # add S11) on the mock
 
 ``--check`` does not write the report (CI and the local gates leave the tree unchanged). The
 script imports flightcheck; it never runs the ``flightcheck`` CLI. ``--runtime`` is the consent
@@ -110,18 +111,21 @@ def _runtime_env() -> dict[str, str]:
 
 
 def evaluate_runtime(manifest: dict) -> RuntimeEvaluation:
-    """Run every fixture app through the manifest's scenarios (no [test.expect] overrides)."""
+    """Run every fixture app through its scenarios (no [test.expect] overrides): the manifest's
+    ``scenarios``, or an app entry's own ``scenarios`` (Groq apps add S11, ADR-038)."""
     result = RuntimeEvaluation(scenarios=list(manifest["scenarios"]))
     root = REPO_ROOT / manifest["root"]
     env = _runtime_env()
     for app, entry in sorted(manifest["apps"].items()):
         result.apps += 1
+        scenarios = list(entry.get("scenarios", manifest["scenarios"]))
+        result.scenarios.extend(s for s in scenarios if s not in result.scenarios)
         request = TestRequest(
-            root=root / app, allow_exec=True, scenarios=result.scenarios, include_scan=False
+            root=root / app, allow_exec=True, scenarios=scenarios, include_scan=False
         )
         report = run_test(request, load_config(root / app), environ=env)
         got = {s.scenario_id: s for s in report.scenarios}
-        for scenario in result.scenarios:
+        for scenario in scenarios:
             want = entry.get(scenario, {})
             for check_id, status in want.get("checks", {}).items():
                 result.expected[(app, scenario, check_id)] = status
@@ -329,7 +333,8 @@ def render(
         "## Runtime agreement (plan §26.1)",
         "",
         f"Every fixture app ({runtime.apps}) ran through {', '.join(runtime.scenarios)} against "
-        "the mock (mock fidelity: documentation model; no `[test.expect]`), and each "
+        "the mock (S11 on Groq apps only, ADR-038; mock fidelity: documentation model; no "
+        "`[test.expect]`), and each "
         "`(fixture, scenario, check_id)` status was compared with "
         "`tests/fixtures/expected_runtime.json`. Contract checks are reported once per run "
         "(ADR-029), so they count under the first scenario only.",

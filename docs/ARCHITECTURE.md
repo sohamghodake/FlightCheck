@@ -88,7 +88,7 @@ per layer follow §5 (pydantic everywhere; ADR-034 item 4).
 | 8   | Capability registry        | `providers/capabilities.py`                       | Profiles: capability → support level + source.                                    | `get_profile(provider) -> CapabilityProfile`                   | P0  |
 | 9   | Static rule engine         | `scanner/engine.py`, `scanner/rules/*.py`         | Rule registry, execution, ordering, filtering.                                    | `@rule(...)`, `run_rules(index, config) -> list[Finding]`      | P0  |
 | 10  | Workflow validator         | `runtime/validators.py`                           | Assertions over recorded traffic.                                                 | `validate_traffic(traffic, scenario) -> list[CheckResult]`     | P0  |
-| 11  | Mock provider              | `mock/app.py`, `payloads.py`, `recorder.py`, `server.py` | Contract-aware fake BharatCode API; recording; thread runner.              | `create_mock_app(script, recorder)`, `MockServer`              | P0  |
+| 11  | Mock provider              | `mock/app.py`, `payloads.py`, `recorder.py`, `server.py` | Contract-aware fake BharatCode API, plus Groq routes under `/openai/v1` (G4, ADR-038); recording; thread runner. | `create_mock_app(script, recorder)`, `MockServer`              | P0  |
 | 12  | Failure simulation         | `mock/faults.py`, `runtime/scenarios.py`          | Scripted per-request behaviours; scenario catalogue + expectations.               | `FaultScript`, `SCENARIOS`                                     | P0  |
 | 13  | AI diagnostic service      | `diagnostics/*.py`                                | Consent, sanitisation, prompting, validation, fallback.                           | `DiagnosticService.explain(report, options)`                   | P0  |
 | 14  | Report generation          | `reporting/*.py`                                  | JSON (schema-versioned), HTML, terminal.                                          | `write_json`, `render_html`, `render_terminal`                 | P0  |
@@ -176,4 +176,17 @@ read the failing type's `model_fields` and update this list with the payload.
 
 The SDK's `responses.stream()` helper also needs `response.output_item.added` and
 `response.content_part.added` before the first delta, so the mock sends them.
+
+**Groq routes** (`/openai/v1/...`, phase G4, ADR-038) use the same builders plus Groq's
+documented fields (docs/GROQ_CONTRACT.md; the SDK accepts them as extra fields):
+
+| Payload (Groq route)                 | Added or changed                                                                                                   | Contract |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------ | -------- |
+| `ChatCompletion`                     | `x_groq.id` (`req_fc_mock_<seq>`), `usage.{queue_time,prompt_time,completion_time,total_time}`, `system_fingerprint`, `service_tier: "on_demand"` | C13, C14 |
+| `ChatCompletionChunk` (first, final) | `x_groq.id`; the final chunk also `x_groq.usage`, and top-level `usage` with `stream_options.include_usage`        | ST2      |
+| Chat stream failure                  | after `n` content chunks, a chunk with `choices: []` and `x_groq.error`, then the body ends without `[DONE]`      | ST3 (wire format [UNVERIFIED]) |
+| error body                           | `{"error": {"message", "type"}}`, no `code`; tool validation adds `failed_generation` (a JSON string, format [UNVERIFIED]) | E1, T6 |
+| response headers                     | no `x-request-id`; `HTTP_ERROR` may add `retry-after` (429 only) and `x-ratelimit-*`                                 | E5, E6, E10 |
+| `Response` and its stream events     | unchanged OpenAI shapes                                                                                            | R15 ([UNVERIFIED]) |
+| `Model` (`GET /openai/v1/models`)    | the dated catalogue's IDs, `owned_by: "groq"`                                                                      | §1.8, A6 ([UNVERIFIED] shape) |
 

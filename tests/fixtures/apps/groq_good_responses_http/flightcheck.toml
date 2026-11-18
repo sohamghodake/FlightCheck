@@ -1,0 +1,8 @@
+# Runtime test settings for this fixture (plan §17.2; Groq run, ADR-038). No [project] table:
+# detection classifies the app as groq. The Groq defaults apply: GROQ_BASE_URL gets the mock
+# root (this app adds /openai/v1 itself, like the groq SDK), GROQ_API_KEY the fake key, and the
+# scenarios are S01–S06 plus S11. "python" must be on PATH; FlightCheck runs exactly this
+# command, never through a shell.
+[test]
+command = ["python", "main.py", "What is the weather in Delhi?"]
+timeout_s = 20

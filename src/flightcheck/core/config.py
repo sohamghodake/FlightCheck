@@ -158,6 +158,15 @@ GROQ_MODELS: dict[str, GroqModelFacts] = {
     "canopylabs/orpheus-arabic-saudi": GroqModelFacts("preview", "tts", 4_000, 50_000),
 }
 GROQ_DOCUMENTED_MODELS = frozenset(GROQ_MODELS)
+
+# `flightcheck test` on a Groq run (ADR-038): the [test] defaults used when the developer did not
+# set the field. GROQ_BASE_URL is the groq SDK's variable and gets the mock **root** (the SDK
+# adds /openai/v1 itself, contract K3/K4); every other base-URL variable gets <mock>/openai/v1
+# (the OpenAI SDK needs the full prefix, K4). S11 (429 with retry-after) runs on Groq only.
+GROQ_TEST_BASE_URL_ENV = (GROQ_BASE_URL_ENV, "OPENAI_BASE_URL")
+GROQ_TEST_API_KEY_ENV = (GROQ_API_KEY_ENV, "OPENAI_API_KEY")
+GROQ_TEST_SCENARIOS = ("S01", "S02", "S03", "S04", "S05", "S06", "S11")
+RuntimeProvider = Literal["bharatcode", "groq"]
 # Shut down for free/developer usage (contract M2): requests to these IDs fail. The two Llama
 # models shut down on 16 Aug 2026 for free/developer tiers stay in GROQ_MODELS (Enterprise).
 GROQ_DECOMMISSIONED_MODELS = frozenset(
@@ -339,6 +348,22 @@ class TestConfig(_Config):
     stdin: str = ""
     max_requests: int = Field(default=25, ge=1)
     expect: ExpectConfig | None = None
+
+    def for_provider(self, provider: RuntimeProvider) -> TestConfig:
+        """This section with the run provider's defaults for fields the developer did not set
+        (ADR-038). BharatCode runs get ``self`` unchanged; Groq runs get the Groq variable names
+        and scenario list (``GROQ_TEST_*``) wherever ``base_url_env``, ``api_key_env`` or
+        ``scenarios`` was left at its default. A field set in ``flightcheck.toml`` or an
+        override always wins."""
+        if provider != "groq":
+            return self
+        defaults = {
+            "base_url_env": list(GROQ_TEST_BASE_URL_ENV),
+            "api_key_env": list(GROQ_TEST_API_KEY_ENV),
+            "scenarios": list(GROQ_TEST_SCENARIOS),
+        }
+        update = {k: v for k, v in defaults.items() if k not in self.model_fields_set}
+        return self.model_copy(update=update) if update else self
 
     @field_validator("command", mode="before")
     @classmethod

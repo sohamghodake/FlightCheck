@@ -11,7 +11,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from flightcheck import __version__
-from flightcheck.core.config import FlightCheckConfig, TestConfig
+from flightcheck.core.config import FlightCheckConfig, RuntimeProvider, TestConfig
 from flightcheck.core.errors import ConfigError
 from flightcheck.core.logging import get_logger
 from flightcheck.core.models import (
@@ -61,7 +61,7 @@ from flightcheck.runtime.validators import (
     skip_all,
     to_finding,
 )
-from flightcheck.scanner.detect import detect
+from flightcheck.scanner.detect import DetectionResult, detect
 from flightcheck.scanner.discovery import DiscoveryOptions
 from flightcheck.scanner.engine import BharatCodeMode, GroqMode, RuleContext, run_rules
 from flightcheck.scanner.parser import RepoIndex, build_index
@@ -193,17 +193,44 @@ def _preflight_reason(locations: Sequence[Location]) -> str:
     )
 
 
-def _select_scenarios(ids: Sequence[str]) -> tuple[list[Scenario], list[Diagnostic]]:
+def runtime_provider(detection: DetectionResult, declared: str | None) -> RuntimeProvider:
+    """The provider a ``test`` run imitates (ADR-038): ``groq`` when ``[project] provider``
+    declares Groq or the repository-level detection is ``groq``; otherwise ``bharatcode``, the
+    behaviour every run had before G4. A Groq model ID alone never makes a run Groq: it is only
+    a supporting signal in detection (ADR-036 item 1)."""
+    repo = detection.repo
+    if declared == "groq" or (repo is not None and repo.provider == "groq"):
+        return "groq"
+    return "bharatcode"
+
+
+def _check_scenario_ids(ids: Sequence[str]) -> None:
     unknown = [sid for sid in ids if sid not in KNOWN_SCENARIO_IDS]
     if unknown:
         raise ConfigError(
             f"Unknown scenario ID(s): {', '.join(sorted(set(unknown)))}",
             hint=f"Use scenario IDs from: {', '.join(KNOWN_SCENARIO_IDS)}.",
         )
+
+
+def _select_scenarios(
+    ids: Sequence[str], provider: RuntimeProvider = "bharatcode"
+) -> tuple[list[Scenario], list[Diagnostic]]:
+    _check_scenario_ids(ids)
     selected: list[Scenario] = []
     notes: list[Diagnostic] = []
     for sid in dict.fromkeys(ids):
-        if sid in SCENARIOS:
+        if sid in SCENARIOS and provider not in SCENARIOS[sid].providers:
+            notes.append(
+                Diagnostic(
+                    level="info",
+                    code="scenario_not_applicable",
+                    message=f"Scenario {sid} ({SCENARIOS[sid].name}) applies to "
+                    f"{' and '.join(sorted(SCENARIOS[sid].providers))} runs only; this run "
+                    f"imitates {provider}, so it was not run.",
+                )
+            )
+        elif sid in SCENARIOS:
             selected.append(SCENARIOS[sid])
         else:
             notes.append(
@@ -234,8 +261,13 @@ def _run_scenario(
     cwd: Path,
     parent_env: Mapping[str, str],
     path_aliases: Mapping[str, str],
+    provider: RuntimeProvider = "bharatcode",
 ) -> tuple[AppRun | None, list[RecordedExchange], list[CheckResult]]:
-    """Fresh mock + fresh child for one scenario. ``MockServerError`` propagates (exit 3)."""
+    """Fresh mock + fresh child for one scenario. ``MockServerError`` propagates (exit 3).
+
+    The mock serves both route families; ``provider`` picks the URL the child gets: BharatCode
+    runs ``<mock>/api/model/v1``, Groq runs ``<mock>/openai/v1`` (and the mock root in
+    ``GROQ_BASE_URL``, contract K4)."""
     fake_key = make_fake_key()
     server = MockServer(
         scenario.script_factory(), fake_key=fake_key, max_requests=test.max_requests
@@ -253,7 +285,8 @@ def _run_scenario(
     launch_error: AppLaunchError | None = None
     server.start()
     try:
-        env = build_child_env(parent_env, test, server.base_url, fake_key)
+        mock_url = server.groq_base_url if provider == "groq" else server.base_url
+        env = build_child_env(parent_env, test, mock_url, fake_key, mock_root=server.origin)
         try:
             app_run = run_app(
                 test.command,
@@ -273,13 +306,14 @@ def _run_scenario(
         return (
             None,
             exchanges,
-            error_all(scenario, f"{launch_error.message} Hint: {launch_error.hint}."),
+            error_all(scenario, f"{launch_error.message} Hint: {launch_error.hint}.", provider),
         )
     config = CheckConfig(
         test=test,
         recording_complete=recorder.complete,
         missing_records=recorder.dropped + recorder.record_failures,
         aborted_for_limit=bool(fired),
+        provider=provider,
     )
     assert app_run is not None
     _log.info(
@@ -296,15 +330,19 @@ _ENTRY_CANDIDATES = ("app.py", "main.py")
 
 
 def ready_test_section(root: Path) -> str:
-    """A ready-to-paste ``[test]`` block for ``flightcheck.toml`` (§23.2)."""
+    """A ready-to-paste ``[test]`` block for ``flightcheck.toml`` (§23.2).
+
+    The variable lists are comments: their defaults depend on the run's provider (ADR-038),
+    and a pasted explicit list would override the Groq defaults in a Groq project."""
     entry = next((name for name in _ENTRY_CANDIDATES if (root / name).is_file()), "app.py")
     return (
         "[test]\n"
         f'command = ["python", "{entry}", "What is the weather in Delhi?"]\n'
         'cwd = "."\n'
         "timeout_s = 60\n"
-        'base_url_env = ["BHARATCODE_BASE_URL", "OPENAI_BASE_URL"]\n'
-        'api_key_env = ["BHARATCODE_API_KEY", "OPENAI_API_KEY"]'
+        "# base_url_env / api_key_env default to the provider's variables (set them only to\n"
+        "# override): BHARATCODE_BASE_URL, OPENAI_BASE_URL / BHARATCODE_API_KEY, OPENAI_API_KEY;\n"
+        "# on Groq runs GROQ_BASE_URL, OPENAI_BASE_URL / GROQ_API_KEY, OPENAI_API_KEY."
     )
 
 
@@ -323,6 +361,7 @@ class TestPlan:
     index: RepoIndex
     preflight_refusal: str | None  # set when a hard-coded base URL means nothing will run
     preflight_path: str | None = None
+    provider: RuntimeProvider = "bharatcode"  # the provider the mock imitates (ADR-038)
 
 
 def require_consent(allow_exec: bool, target: str) -> None:
@@ -344,13 +383,20 @@ def plan_test(request: TestRequest, config: FlightCheckConfig) -> TestPlan:
             "No [test] section in flightcheck.toml: FlightCheck does not know how to run the app.",
             hint="Add this to flightcheck.toml (adjust the command):\n" + ready_test_section(root),
         )
-    selected, notes = _select_scenarios(
-        request.scenarios if request.scenarios is not None else test.scenarios
-    )
+    if request.scenarios is not None:
+        _check_scenario_ids(request.scenarios)
+    else:
+        _check_scenario_ids(test.scenarios)
     cwd = resolve_cwd(root, test.cwd)
     if not cwd.is_dir():
         raise ConfigError(f"[test].cwd is not a directory: {test.cwd}")
     index = build_index(root, DiscoveryOptions.from_config(config.scan))
+    _, _, declared = _provider_mode(ScanRequest(root=root), config)
+    provider = runtime_provider(detect(index, declared_provider=declared), declared)
+    test = test.for_provider(provider)
+    selected, notes = _select_scenarios(
+        request.scenarios if request.scenarios is not None else test.scenarios, provider
+    )
     hardcoded = hardcoded_base_urls(index)
     return TestPlan(
         root=root,
@@ -361,6 +407,7 @@ def plan_test(request: TestRequest, config: FlightCheckConfig) -> TestPlan:
         index=index,
         preflight_refusal=_preflight_reason(hardcoded) if hardcoded else None,
         preflight_path=hardcoded[0].path if hardcoded else None,
+        provider=provider,
     )
 
 
@@ -383,6 +430,7 @@ def run_test(
     if plan is None:
         plan = plan_test(request, config)
     root, test, selected, cwd = plan.root, plan.test, plan.scenarios, plan.cwd
+    provider = plan.provider
     notes = list(plan.notes)
     index = plan.index
 
@@ -412,9 +460,9 @@ def run_test(
     runs: list[tuple[Scenario, AppRun | None, list[RecordedExchange], list[CheckResult]]] = []
     for scenario in selected:
         if reason is not None:
-            runs.append((scenario, None, [], skip_all(scenario, reason)))
+            runs.append((scenario, None, [], skip_all(scenario, reason, provider)))
             continue
-        runs.append((scenario, *_run_scenario(scenario, test, cwd, parent_env, aliases)))
+        runs.append((scenario, *_run_scenario(scenario, test, cwd, parent_env, aliases, provider)))
 
     checks_once = report_once([(exchanges, checks) for _, _, exchanges, checks in runs])
     scenarios: list[ScenarioResult] = []
@@ -432,7 +480,7 @@ def run_test(
             )
         )
     runtime_findings = [
-        to_finding(check)
+        to_finding(check, provider)
         for result in scenarios
         for check in result.checks
         if check.status is CheckStatus.FAILED
@@ -448,6 +496,7 @@ def run_test(
             "include_scan": request.include_scan,
             "timeout_s": test.timeout_s,
             "max_requests": test.max_requests,
+            "mock_provider": provider,
         },
         python_version=platform.python_version(),
         platform=platform.system().lower() or "unknown",
@@ -516,6 +565,7 @@ __all__ = [
     "plan_test",
     "require_consent",
     "run_scan",
+    "runtime_provider",
     "run_test",
     "ready_test_section",
 ]

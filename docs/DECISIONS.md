@@ -1230,3 +1230,122 @@ Format:
 - Consequences: Groq call sites get contract findings in auto mode; `--provider groq` checks a
   repository as Groq end to end. G4 adds the mock/runtime side; G5 verifies the [UNVERIFIED]
   rows (FC-GQ-016 decided then). G6 retires FC-BC-* and the BharatCode texts kept here.
+
+## ADR-038 — Groq mock routes, Groq runs of `flightcheck test` and runtime check gating (phase G4)
+
+- Date: 2026-11-18 · Phase: G4 · Status: accepted
+- Context: ADR-035 adds Groq beside BharatCode. G2/G3 classify and scan Groq call sites; the mock,
+  harness and runtime checks still spoke only BharatCode. docs/GROQ_CONTRACT.md §4.5–4.7 and
+  §4.9 list the G4 work. No existing runtime result may change (the 273 BharatCode
+  `(fixture, scenario, check_id)` keys of expected_runtime.json stay identical).
+- Decision:
+  1. **The route prefix selects the mock's behaviour.** One app on one port serves both families:
+     BharatCode's under `base_path` (default `/api/model/v1`), answered byte-for-byte as before,
+     and Groq's under `/openai/v1` (`models`, `responses`, `chat/completions`; an unknown
+     `/openai/v1/...` path is a Groq-shaped recorded 404). The OpenAI SDK (base
+     `<mock>/openai/v1`) and the groq SDK's layout (base `<mock>`, paths with `/openai/v1`, K4)
+     reach the same routes. `base_path="/openai/v1"` is refused. Groq routes: Chat bodies add
+     `x_groq.id`, the usage timing fields, `system_fingerprint`, `service_tier: "on_demand"`
+     (C13, C14); errors are `{"error": {"message", "type"}}` without `code` (E1; 498's type is
+     `capacity_exceeded`, E2; other non-400 types are [UNVERIFIED]); no `x-request-id` header
+     (E10); Chat streams carry `x_groq` in the first and final chunk, `usage` with
+     `include_usage` (ST2); a missing model is answered as `openai/gpt-oss-20b`. Groq-route
+     exchanges record `response_summary` keys `provider: "groq"`, `received_ms` (arrival time),
+     `retry_after` and `status_unverified` (on a contract 400 Groq does not document as one);
+     BharatCode exchanges gain none.
+  2. **Groq 400s live in `core.contract`** (`groq_chat_contract_violations`,
+     `groq_responses_contract_violations`, constants equal to FC-GQ's, tested): documented 400s
+     C2 (`logprobs`/`logit_bias`/`top_logprobs` supplied, not null/false), C4 (`n` ≠ 1), M4
+     (`reasoning_effort` / `reasoning.effort` outside a catalogue model's documented set), S8
+     (`reasoning_format: "raw"` with `json_object` or tools); and, with
+     `Violation.status_documented=False` and a message labelled [UNVERIFIED] (contract §2),
+     `store: true`, `previous_response_id`, `include`, `safety_identifier`, `prompt_cache_key`,
+     `prompt` on /responses (R4, R5). Not enforced until G5: `messages[].name` (C2/C3),
+     `truncation` (R7), `background` (R8), built-in tools on other models (R9: error
+     [UNVERIFIED]; FC-RT-015 judges them from traffic), C5's penalties/`metadata`/`store` on Chat.
+  3. **Faults.** `HTTP_ERROR` takes `headers` (only `retry-after` and the six `x-ratelimit-*`
+     names, E5/E6; on Groq routes `retry-after` only with 429, else a recorded mock error); the
+     parameter is opt-in on BharatCode routes too, so existing scripts are unchanged.
+     `STREAM_FAIL_AFTER` on a Groq Chat stream sends `n` content chunks, then a chunk with
+     `choices: []` and `x_groq.error`, then ends without `[DONE]` (field ST3; surroundings
+     [UNVERIFIED]); on /responses it stays `response.failed` (OpenAI shape, [UNVERIFIED], R15).
+     `TRUNCATE_TOOL_CALL` is kept and labelled [UNVERIFIED] for Groq (T6). `KEEPALIVE_STREAM` is
+     generic and never cited as Groq behaviour (ST4). New `TOOL_VALIDATION_ERROR` (P1, Groq routes
+     only; on a BharatCode route a recorded 500): 400 with `failed_generation`, a JSON string with
+     reason, `tool_call_id`, name and attempted arguments (T6 names the parts; format
+     [UNVERIFIED]).
+  4. **Which runs are Groq runs.** `orchestrator.runtime_provider`: `groq` when `[project]
+     provider` (a profile's kind) is `groq` (it wins over a detection conflict) or the
+     repository-level detection is `groq`; otherwise `bharatcode`, every run's behaviour before
+     G4. A Groq model ID alone never makes a run Groq (ADR-036). `TestPlan.provider`, recorded as
+     `metadata.options.mock_provider` (additive). Every existing fixture app stays a BharatCode
+     run (tested).
+  5. **Environment (security fix, contract §4.9).** `GROQ_API_KEY` and `GROQ_BASE_URL` are
+     removed from every child's environment after the allowlist (`harness.ALWAYS_SCRUBBED`;
+     tested also with an allowlist that names them). A `base_url_env` entry named
+     `GROQ_BASE_URL` gets the mock **root** (the groq SDK appends `/openai/v1`, K3/K4); every
+     other entry gets the run's mock URL (`<mock>/openai/v1` on Groq runs,
+     `<mock>/api/model/v1` otherwise). **Provider-aware `[test]` defaults**:
+     `TestConfig.for_provider("groq")` fills fields the developer did not set (pydantic
+     `model_fields_set`) with `GROQ_TEST_BASE_URL_ENV` (`GROQ_BASE_URL`, `OPENAI_BASE_URL`),
+     `GROQ_TEST_API_KEY_ENV` (`GROQ_API_KEY`, `OPENAI_API_KEY`) and `GROQ_TEST_SCENARIOS`
+     (S01–S06, S11); a value set in flightcheck.toml or an override always wins; BharatCode runs
+     keep `TestConfig` unchanged (its defaults are unchanged too). The ready-to-paste `[test]`
+     block now shows the variable lists as comments, so pasting it cannot override the Groq
+     defaults.
+  6. **Check gating** (`CheckMeta.providers`; `scenarios.every_scenario_check_ids(provider)`,
+     `Scenario.check_ids_for(provider)`, `Scenario.providers`; every cell tested in
+     `tests/runtime/test_groq_runtime.py`):
+
+     | Check | BharatCode run | Groq run |
+     | ----- | -------------- | -------- |
+     | FC-RT-001, 003, 004, 005 | every scenario | not evaluated (001 → 009, 003 → 015; 004: R8 undocumented; 005: R13 [UNVERIFIED]) |
+     | FC-RT-002 | every scenario | every scenario (R3, R4) |
+     | FC-RT-006, 007 | every scenario (32 000; BharatCode catalogue) | every scenario (per-model maximum; Groq catalogue of 18 Nov 2026) |
+     | FC-RT-009, 015 | not evaluated | every scenario (R5; R9, T8) |
+     | FC-RT-008 | S01 | S01 |
+     | FC-RT-011…014 | S04 | S04 |
+     | FC-RT-020, 023 / 022, 023 / 030 | S03 / S05 / S06 | S03 / S05 / S06 |
+     | FC-RT-040, 041 | S02 | S02 |
+     | FC-RT-044 | not evaluated (S11 is Groq-only) | S11 (E5, K6) |
+     | FC-RT-050, 060 | every scenario | every scenario |
+
+     S11 selected on a BharatCode run → info diagnostic `scenario_not_applicable`, no result.
+     `report_once` covers the union of both every-scenario sets.
+  7. **New IDs (ADR-012).** FC-RT-009 "store is not true on /responses" (high: store other than
+     false/null fails; omitted passes, unlike FC-RT-001). FC-RT-015 "Only tools the model
+     supports" (high: an undocumented tool type, or a built-in tool on a catalogue model without
+     built-in tools, fails; a model outside the catalogue → `needs_review`; both endpoints, T8).
+     FC-RT-044 "429 retry waits for retry-after" (medium): the gap from the 429's `at_ms` (when
+     the mock answered) to the next model request's `received_ms` (arrival) must be ≥
+     `retry-after` × 1000 ms, with no tolerance: both readings truncate to whole milliseconds and
+     the 429 is recorded before it is sent, so a compliant client never measures short, and the
+     arrival time keeps a slow answer from hiding a short wait; no later request →
+     `needs_review` (E9); an `x-stainless-retry-count` > 0 names the SDK (K6).
+  8. **FC-RT-006/007 on Groq** (same IDs): a budget above the model's documented maximum fails
+     (the effect is [UNVERIFIED], §2); a model outside the catalogue makes FC-RT-006
+     `needs_review`. FC-RT-007 fails a missing model (C1), a decommissioned one (severity high,
+     M2) or one outside the dated catalogue (the check's meaning; the message points to
+     GET /models, M6); Enterprise-only Llama models → `needs_review` at info (M2); preview
+     models pass with an M1 note (the FC-GQ-006 reading).
+  9. **Texts.** `CheckMeta.groq_title` / `groq_remediation` / `groq_doc_url` and
+     `validators.meta_for(check_id, provider)`; `to_finding(check, provider)` mirrors failed Groq
+     checks with `provider: "groq"` and Groq's page (FC-RT-023 and other FlightCheck
+     recommendations: no Groq link). Messages on Groq runs cite contract rows and never name
+     BharatCode (tested over every check). On Groq, a Chat tool result that is not a string or
+     list fails (T5 verified), a list of parts or a non-string `function_call_output` is
+     `needs_review` (T5/T10 [UNVERIFIED]); the Chat round trip is verified (T4, T5), the
+     Responses one carries the T10 [UNVERIFIED] label (and so mirrors at medium confidence). All
+     BharatCode texts are unchanged (pinned by tests).
+  10. **Evaluation.** An expected_runtime.json app entry may list its own `scenarios`; Groq apps
+      list S01–S06 and S11. `scripts/eval_fixtures.py --runtime` runs each app's list.
+  11. **Deferred (P1): FC-RT-045** "invalid tool call 400 handled" (T6) and a scenario serving
+      `TOOL_VALIDATION_ERROR`. "Retries or exits non-zero without crashing" needs either a crash
+      heuristic on the output (ADR-030 forbids inferring outcomes from output) or a new
+      `[test.expect]` key; both are decisions of their own. The fault is built and tested.
+- Consequences: `flightcheck test` checks Groq apps against Groq's documented contract, and a
+  groq-SDK app can no longer pick up a real key or host from the developer's shell. BharatCode
+  runs are unchanged (273 keys identical). Everything labelled [UNVERIFIED] here is G5's to
+  verify live; `diagnostics` still hands `explain` the BharatCode remediation catalogue
+  (`orchestrator.check_catalogue`), which G5 makes provider-aware with `explain --llm groq`. G6
+  removes the BharatCode family and FC-RT-001/003/004/005.

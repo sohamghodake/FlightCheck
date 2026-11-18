@@ -1377,6 +1377,65 @@
           "main.py": []
         }
       },
+      "groq_bad_builtin_tools": {
+        "clean": false,
+        "files": {
+          "main.py": []
+        }
+      },
+      "groq_bad_no_resilience": {
+        "clean": false,
+        "files": {
+          "main.py": []
+        }
+      },
+      "groq_bad_stateful": {
+        "clean": false,
+        "files": {
+          "main.py": [
+            {
+              "rule_id": "FC-GQ-001",
+              "line": 24,
+              "severity": "high",
+              "confidence": "high",
+              "kind": "static"
+            },
+            {
+              "rule_id": "FC-GQ-002",
+              "line": 25,
+              "severity": "high",
+              "confidence": "medium",
+              "kind": "static"
+            }
+          ]
+        }
+      },
+      "groq_bad_stream": {
+        "clean": false,
+        "files": {
+          "main.py": [
+            {
+              "rule_id": "FC-GEN-003",
+              "line": 32,
+              "severity": "medium",
+              "confidence": "medium",
+              "kind": "static"
+            }
+          ]
+        }
+      },
+      "groq_good_chat_stream": {
+        "clean": true,
+        "files": {
+          "main.py": []
+        }
+      },
+      "groq_good_responses_http": {
+        "clean": true,
+        "files": {
+          "main.py": []
+        }
+      },
       "known_fp_helper_check": {
         "clean": false,
         "files": {

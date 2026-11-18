@@ -230,6 +230,9 @@ def test_unverified_topics_keep_their_label_and_every_topic_exists():
 
 def test_excerpts_cover_every_runtime_check_with_a_contract_row():
     without_contract = {"FC-RT-008", "FC-RT-060"}  # baseline exit, request limit: no row
+    # Groq-only checks (G4): the excerpts are BharatCode's contract; Groq excerpts come with
+    # explain --llm groq in G5.
+    without_contract |= {"FC-RT-009", "FC-RT-015", "FC-RT-044"}
     assert set(CHECKS) - set(ce.RULE_TOPICS) == without_contract
     assert ce.excerpts_for(["FC-RT-008", "FC-BC-001"]).keys() == {"FC-BC-001"}
 

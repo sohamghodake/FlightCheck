@@ -135,6 +135,94 @@ Reserved (P1, not implemented): **FC-GEN-008** (tool calls executed without chec
 Reserved (P1, not implemented): **FC-SEC-003** (`.env` present but not ignored). FC-SEC-004 (P2)
 needs non-Python scanning.
 
+## Runtime checks on Groq runs (`flightcheck test`, phase G4)
+
+`flightcheck test` imitates one provider per run (ADR-038). A run is a **Groq run** when
+`[project] provider = "groq"` (or a profile of kind `groq`) is declared, or when the
+repository-level detection is `groq`; every other run imitates BharatCode exactly as before. A
+Groq model ID alone never makes a run Groq (detection decides, ADR-036). The report records the
+choice in `metadata.options.mock_provider`. Every Groq message cites a row of
+[GROQ_CONTRACT.md](GROQ_CONTRACT.md) (read 18 Nov 2026); [UNVERIFIED] rows stay labelled.
+
+On a Groq run the child process gets FlightCheck's fake key in `GROQ_API_KEY` and
+`OPENAI_API_KEY`, the mock **root** in `GROQ_BASE_URL` (the groq SDK adds `/openai/v1`, contract
+K3/K4) and `<mock>/openai/v1` in `OPENAI_BASE_URL` and any other `base_url_env` name. These
+are the defaults for `base_url_env`, `api_key_env` and `scenarios` when `[test]` does not set
+them; a value set in `flightcheck.toml` wins. `GROQ_API_KEY` and `GROQ_BASE_URL` are never
+inherited from your shell, on any run.
+
+Scenarios on Groq runs: S01–S06 with Groq shapes (S02's 503 bodies use Groq's error format;
+S06 on a Chat stream ends with an `x_groq.error` chunk, wire format [UNVERIFIED], ST3) plus
+**S11 "Rate limited (429)"**: a 429 with `retry-after: 2` and the six `x-ratelimit-*` headers
+(E5, E6), then a normal answer. S11 applies to Groq runs only; selected on a BharatCode run it
+gives an info diagnostic (`scenario_not_applicable`) and no result.
+
+| Check | Meaning | BharatCode run | Groq run | Groq basis |
+| ----- | ------- | -------------- | -------- | ---------- |
+| FC-RT-001 | `store` is false on /responses | every scenario | — (see 009) | — |
+| FC-RT-002 | No `previous_response_id` | every scenario | every scenario | R3, R4 (rejection [UNVERIFIED]) |
+| FC-RT-003 | Only function tools | every scenario | — (see 015) | — |
+| FC-RT-004 | No background mode | every scenario | — | R8: undocumented |
+| FC-RT-005 | Supported input modalities | every scenario | — | R13: [UNVERIFIED] |
+| FC-RT-006 | Output budget | every scenario (≤ 32 000) | every scenario (each model's maximum) | §1.8 (effect of exceeding [UNVERIFIED]) |
+| FC-RT-007 | Model in the catalogue | every scenario (BharatCode's) | every scenario (Groq's, dated) | §1.8, C1, M1, M2, M6 |
+| FC-RT-008 | Baseline run exits 0 | S01 | S01 | — |
+| **FC-RT-009** | `store` is not true on /responses | — | every scenario | R5 (rejection [UNVERIFIED]) |
+| FC-RT-011…014 | Tool round trip | S04 | S04 | T4, T5 (Chat); R3, T10 [UNVERIFIED] (Responses) |
+| **FC-RT-015** | Only tools the model supports | — | every scenario | R9, T8 (error [UNVERIFIED]) |
+| FC-RT-020 | Truncation surfaced | S03 | S03 | C11, R10 |
+| FC-RT-022 | Incomplete tool call not executed | S05 | S05 | FlightCheck recommendation; T6 note |
+| FC-RT-023 | No identical retry after truncation | S03, S05 | S03, S05 | FlightCheck recommendation |
+| FC-RT-030 | Stream failure surfaced | S06 | S06 | ST3 ([UNVERIFIED] wire format), ST5 |
+| FC-RT-040 / 041 | 503 retried / backoff present | S02 | S02 | E3, E9, K5, K6 |
+| **FC-RT-044** | 429 retry waits for `retry-after` | — | S11 | E5, K6 |
+| FC-RT-050 | Only the fake key was used | every scenario | every scenario | K3, K4 |
+| FC-RT-060 | Request limit respected | every scenario | every scenario | — |
+
+FC-RT-001 and FC-RT-003 keep running unchanged on BharatCode runs until G6 retires them; their
+Groq counterparts have new meanings, so new IDs (ADR-012). Every-scenario checks are reported
+once per run (ADR-029).
+
+- **FC-RT-009** (high): `failed` when a /responses request sends `store` other than false or
+  null (R5). An omitted `store` passes (Groq's default is false), unlike FC-RT-001.
+- **FC-RT-015** (high): `failed` for a tool type Groq does not document (anything but
+  `function`, `mcp`, `browser_search`, `code_interpreter`) or a built-in tool on a catalogue model
+  without built-in tools (only `openai/gpt-oss-20b` / `-120b`, R9, T8); `needs_review` for a
+  built-in tool with a model outside the catalogue. Both endpoints (T8: Chat too).
+- **FC-RT-006 / 007 on Groq** (medium): the budget (`max_completion_tokens`, `max_tokens`,
+  `max_output_tokens`) against the model's documented maximum; a model outside the catalogue
+  makes FC-RT-006 `needs_review`. FC-RT-007 fails a missing model (C1), a decommissioned one
+  (high, M2) or one outside the catalogue of 18 Nov 2026 (GET /models is the live list, M6);
+  an Enterprise-only Llama model (shut down for free/developer tiers, M2) is `needs_review`
+  (info); a preview model passes with an M1 note.
+- **FC-RT-044** (medium, S11): the gap from the mock's 429 answer to the arrival of the next
+  model request must be at least `retry-after` (2 s). The arrival time is recorded on Groq
+  routes, so a slow answer never makes a short wait look long enough. `passed` names the SDK
+  when the request carries `x-stainless-retry-count` (both SDKs honour `retry-after`, K6); no
+  further request is `needs_review` (giving up may be deliberate; Groq recommends retrying with
+  backoff, E9).
+- **Text on Groq runs**: FC-RT-012/013/014 cite T5/T4 for Chat (verified: a Chat dict tool
+  result is `failed`, a list of parts `needs_review`) and T10 [UNVERIFIED] for Responses (a
+  non-string `function_call_output` is `needs_review`; a failed FC-RT-014 there mirrors at medium
+  confidence). FC-RT-022 notes that Groq may answer 400 `failed_generation` instead (T6,
+  [UNVERIFIED] which); FC-RT-023 is a FlightCheck recommendation and cites no Groq row;
+  FC-RT-030 names the `x_groq.error` chunk; FC-RT-040/041 drop "model busy" (Groq: "wait before
+  retrying", E3) and cite exponential backoff with jitter (E9). Remediation and documentation
+  links come from Groq's pages (`validators.meta_for`); failed checks mirror as findings with
+  `provider: "groq"`.
+- **Mock on Groq routes** (`/openai/v1/...`): Groq's Chat fields (`x_groq.id`, usage timing,
+  `system_fingerprint`, `service_tier`, C13/C14), error body `{"error": {"message", "type"}}`
+  without `code` (E1), no `x-request-id` header (E10), the documented 400s (C2, C4, M4, S8) and,
+  labelled [UNVERIFIED], 400s for `store: true`, `previous_response_id`, `include`,
+  `safety_identifier`, `prompt_cache_key`, `prompt` on /responses (R4, R5, §2). Not enforced
+  until G5: `messages[].name` (C2/C3 conflict), `truncation` (R7), `background` (R8), built-in
+  tools on other models (R9), penalties/`metadata`/`store` on Chat (C5). Responses streams keep
+  OpenAI's event shapes ([UNVERIFIED], R15); keepalive comments are never presented as Groq
+  behaviour (ST4).
+- **Not built (P1)**: FC-RT-045 "invalid tool call 400 handled" (T6). The mock's
+  `TOOL_VALIDATION_ERROR` fault exists (400 with `failed_generation`, format [UNVERIFIED]); no
+  scenario serves it yet.
+
 ## Explicit limitations
 
 These are copied from plan §16.2 and ADR-011. A plain-text version is shown in the HTML report's
@@ -174,5 +262,9 @@ These are copied from plan §16.2 and ADR-011. A plain-text version is shown in 
 - **Groq rules see literal requests only.** `chat.completions.parse(response_format=Model)` and
   other SDK-built requests (Pydantic models, `extra_body`) are not inspected; a model name held in
   a variable gets no model-dependent check. Model facts are a snapshot dated 18 Nov 2026.
+- **The Groq mock is a documentation model.** Groq's undocumented wire formats (the
+  `x_groq.error` chunk's surroundings, Responses stream events, error `type` values other than
+  `invalid_request_error`, the effect of R4 parameters) are FlightCheck's assumptions until G5
+  checks them live; a runtime check that rests on one says [UNVERIFIED].
 - **Static findings never claim runtime behaviour.** "Requests from this call site will …" is used
   only for documented contract rules with literal evidence; everything else uses "may".

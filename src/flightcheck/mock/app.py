@@ -1,4 +1,16 @@
-"""FastAPI app for the contract-aware BharatCode mock (plan §18.1; Phases 5A and 5B).
+"""FastAPI app for the contract-aware mock (plan §18.1; Phases 5A and 5B; Groq routes in G4).
+
+One app serves two route families on the same port (ADR-038): BharatCode's under
+``base_path`` (default ``/api/model/v1``), answered exactly as before, and Groq's under
+``/openai/v1`` (``GET /openai/v1/models``, ``POST /openai/v1/responses``,
+``POST /openai/v1/chat/completions``). The route prefix alone selects the behaviour, so an
+OpenAI-SDK app with base URL ``<mock>/openai/v1`` and a groq-SDK app with base URL ``<mock>``
+(the SDK adds ``/openai/v1``, contract K4) both reach the Groq routes. On Groq routes: Groq's
+error body without ``code`` (E1), no ``x-request-id`` header (E10), Groq's Chat body and stream
+fields (C13, ST2, ST3), the documented Groq 400s (C2, C4, M4, S8) and, labelled [UNVERIFIED],
+400s for what Groq lists as unsupported without stating the effect (R4, R5); see
+``core.contract``. Groq-route exchanges record ``response_summary["provider"] = "groq"`` and
+``received_ms`` (arrival time, for FC-RT-044).
 
 Order of checks per request (each failure is recorded and answered with an OpenAI-style error
 body carrying ``x-request-id``; the body shape and codes are [UNVERIFIED] for BharatCode):
@@ -31,7 +43,12 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from flightcheck.core.contract import responses_contract_violations
+from flightcheck.core.contract import (
+    Violation,
+    groq_chat_contract_violations,
+    groq_responses_contract_violations,
+    responses_contract_violations,
+)
 from flightcheck.core.logging import get_logger
 from flightcheck.core.models import Endpoint
 from flightcheck.core.redact import redact, redact_obj
@@ -40,6 +57,7 @@ from flightcheck.mock.faults import FaultScript, MockAction, MockStep
 from flightcheck.mock.recorder import TrafficRecorder, auth_status
 
 DEFAULT_BASE_PATH = "/api/model/v1"
+GROQ_ROUTE_PREFIX = "/openai/v1"  # Groq's OpenAI-compatible prefix (contract A1, K4)
 DEFAULT_MAX_REQUESTS = 25
 MAX_DELAY_S = 600.0
 
@@ -72,6 +90,7 @@ class _Exchange:
     stream: bool = False
     step_id: str = "-"
     summary: dict[str, Any] = field(default_factory=dict)
+    groq: bool = False  # served on a Groq route (/openai/v1/...)
 
 
 @dataclass
@@ -79,6 +98,7 @@ class _Answer:
     status: int
     body: dict[str, Any]
     headers: dict[str, str] = field(default_factory=dict)
+    code: str | None = None  # the mock's own error code when the body carries none (Groq)
 
 
 @dataclass
@@ -101,8 +121,19 @@ class _RecordingStreamingResponse(StreamingResponse):
             self._on_close()
 
 
-def _error(status: int, message: str, code: str | None) -> _Answer:
+def _error(status: int, message: str, code: str | None, groq: bool = False) -> _Answer:
+    if groq:
+        return _Answer(status, payloads.groq_error_body(status, message), code=code)
     return _Answer(status, payloads.error_body(status, message, code))
+
+
+def _groq_violation_message(violation: Violation) -> str:
+    if violation.status_documented:
+        return violation.message
+    return (
+        f"{violation.message} FlightCheck mock: Groq lists this as not supported but does not "
+        "say whether it is rejected; this 400 is [UNVERIFIED]."
+    )
 
 
 def _summarize(endpoint: Endpoint, body: dict[str, Any]) -> dict[str, Any]:
@@ -137,27 +168,41 @@ class _MockService:
         self.max_requests = max_requests
 
     async def handle(
-        self, request: Request, endpoint: Endpoint | None, route_status: int = 404
+        self,
+        request: Request,
+        endpoint: Endpoint | None,
+        route_status: int = 404,
+        *,
+        groq: bool = False,
     ) -> Response:
         """Answer one request. ``endpoint=None`` is an unknown route, answered with
-        ``route_status`` (404 or 405)."""
-        ex = _Exchange(seq=self.recorder.next_seq(), endpoint=endpoint)
+        ``route_status`` (404 or 405). ``groq`` selects Groq's behaviour (route prefix)."""
+        ex = _Exchange(seq=self.recorder.next_seq(), endpoint=endpoint, groq=groq)
+        if groq:
+            ex.summary["provider"] = "groq"
+            ex.summary["received_ms"] = self.recorder.elapsed_ms()
         try:
             answer = await self._dispatch(request, ex, route_status)
         except Exception as exc:  # noqa: BLE001 - every failure must become a recorded 500
             _log.warning("mock handler error on request %d: %s", ex.seq, type(exc).__name__)
             ex.summary["error"] = type(exc).__name__
             answer = _error(
-                500, f"FlightCheck mock error ({type(exc).__name__}).", "flightcheck_mock_error"
+                500,
+                f"FlightCheck mock error ({type(exc).__name__}).",
+                "flightcheck_mock_error",
+                ex.groq,
             )
         if isinstance(answer, _StreamAnswer):
             return self._streaming_response(request, ex, answer.stream)
         error = answer.body.get("error")
         if isinstance(error, dict):
             ex.summary.setdefault("finish", "error")
-            ex.summary["error_code"] = error.get("code")
+            ex.summary["error_code"] = answer.code if ex.groq else error.get("code")
         self._record(request, ex, answer.status)
-        headers = {**answer.headers, **payloads.base_headers(ex.seq)}
+        if ex.groq:
+            headers = payloads.groq_headers(answer.headers)
+        else:
+            headers = {**answer.headers, **payloads.base_headers(ex.seq)}
         return JSONResponse(redact_obj(answer.body), status_code=answer.status, headers=headers)
 
     def _record(self, request: Request, ex: _Exchange, status: int) -> None:
@@ -222,50 +267,65 @@ class _MockService:
             body(),
             on_close,
             status_code=200,
-            headers=stream.headers,
+            headers=payloads.groq_headers(stream.headers) if ex.groq else stream.headers,
             media_type="text/event-stream",
         )
 
     async def _dispatch(
         self, request: Request, ex: _Exchange, route_status: int
     ) -> _Answer | _StreamAnswer:
+        groq = ex.groq
         if ex.seq > self.max_requests:
             ex.step_id = "request_limit"
             return _error(
                 429,
                 f"FlightCheck mock request limit reached ({self.max_requests} requests).",
                 "flightcheck_request_limit",
+                groq,
             )
         if ex.endpoint is None:
             ex.step_id = "route"
             code = "method_not_allowed" if route_status == 405 else "not_found"
-            return _error(route_status, "Unknown route for the FlightCheck mock.", code)
+            return _error(route_status, "Unknown route for the FlightCheck mock.", code, groq)
         auth = auth_status(request.headers.get("authorization"), self.fake_key)
         ex.summary["auth"] = auth
         if auth == "missing":
             ex.step_id = "auth"
-            # The 401 body and code for BharatCode are [UNVERIFIED] (OpenAI's code is used).
+            # The 401 body and code are [UNVERIFIED] for both providers (OpenAI's code is used
+            # on BharatCode routes; Groq routes send no code, E1).
             return _error(
-                401, "Missing bearer token in the Authorization header.", "invalid_api_key"
+                401, "Missing bearer token in the Authorization header.", "invalid_api_key", groq
             )
         if ex.endpoint is Endpoint.MODELS:
             ex.step_id = "models"
-            return _Answer(200, payloads.models_list())
+            return _Answer(200, payloads.groq_models_list() if groq else payloads.models_list())
 
         ex.raw_body = await request.body()
-        # BharatCode's answer to a malformed body is [UNVERIFIED]; OpenAI's 400 is assumed.
+        # The answer to a malformed body is [UNVERIFIED] for both providers; a 400 is assumed.
         try:
             parsed = await request.json()
         except ValueError:
             ex.step_id = "invalid_json"
-            return _error(400, "Request body is not valid JSON.", "invalid_json")
+            return _error(400, "Request body is not valid JSON.", "invalid_json", groq)
         if not isinstance(parsed, dict):
             ex.step_id = "invalid_json"
-            return _error(400, "Request body must be a JSON object.", "invalid_json")
+            return _error(400, "Request body must be a JSON object.", "invalid_json", groq)
         ex.request_json = parsed
         ex.stream = parsed.get("stream") is True
 
-        if ex.endpoint is Endpoint.RESPONSES:
+        if groq:
+            violations = (
+                groq_responses_contract_violations(parsed)
+                if ex.endpoint is Endpoint.RESPONSES
+                else groq_chat_contract_violations(parsed)
+            )
+            if violations:
+                ex.step_id = "contract"
+                ex.summary["violations"] = [v.field for v in violations]
+                if not violations[0].status_documented:
+                    ex.summary["status_unverified"] = True
+                return _error(400, _groq_violation_message(violations[0]), violations[0].code, groq)
+        elif ex.endpoint is Endpoint.RESPONSES:
             violations = responses_contract_violations(parsed)
             if violations:
                 ex.step_id = "contract"
@@ -280,12 +340,28 @@ class _MockService:
         self, step: MockStep, ex: _Exchange, request_json: dict[str, Any]
     ) -> _Answer | _StreamAnswer:
         assert ex.endpoint is not None  # only model endpoints reach a scripted step
+        if ex.groq:
+            request_json = payloads.groq_request(request_json)
         if step.action is MockAction.HTTP_ERROR:
-            status, headers, body = payloads.http_error(request_json, step, ex.seq)
+            build_error = payloads.groq_http_error if ex.groq else payloads.http_error
+            status, headers, body = build_error(request_json, step, ex.seq)
+            if ex.groq and "retry-after" in headers:
+                ex.summary["retry_after"] = headers["retry-after"]
             return _Answer(status, body, headers)
         if step.action is MockAction.STREAM_FAIL_AFTER and not ex.stream:
-            status, headers, body = payloads.stream_failure(request_json, step, ex.seq)
+            build_failure = payloads.groq_stream_failure if ex.groq else payloads.stream_failure
+            status, headers, body = build_failure(request_json, step, ex.seq)
             return _Answer(status, body, headers)
+        if step.action is MockAction.TOOL_VALIDATION_ERROR:
+            if not ex.groq:
+                raise ValueError("TOOL_VALIDATION_ERROR is a Groq fault (contract T6)")
+            tool = payloads.find_function_tool(request_json)
+            if tool is None:
+                ex.summary["no_tools"] = True
+            else:
+                ex.summary["tool"] = tool[0]
+            status, headers, body = payloads.groq_tool_validation_error(request_json, step, ex.seq)
+            return _Answer(status, body, headers, code="tool_validation_failed")
         if step.action is MockAction.DELAY:
             seconds = step.params.get("seconds", 1.0)
             if isinstance(seconds, bool) or not isinstance(seconds, int | float):
@@ -303,12 +379,11 @@ class _MockService:
                 ex.summary["tool"] = tool[0]
                 ex.summary["tool_style"] = tool[2]
         if ex.stream:
-            build_stream = (
-                payloads.responses_stream
-                if ex.endpoint is Endpoint.RESPONSES
-                else payloads.chat_stream
-            )
-            return _StreamAnswer(build_stream(request_json, step, ex.seq))
+            if ex.endpoint is Endpoint.RESPONSES:
+                stream = payloads.responses_stream(request_json, step, ex.seq)
+            else:
+                stream = payloads.chat_stream(request_json, step, ex.seq, groq=ex.groq)
+            return _StreamAnswer(stream)
         builders = (
             payloads.RESPONSES_BUILDERS
             if ex.endpoint is Endpoint.RESPONSES
@@ -317,6 +392,8 @@ class _MockService:
         status, headers, body = builders[_BUILDER_FOR_ACTION[step.action]](
             request_json, step, ex.seq
         )
+        if ex.groq and ex.endpoint is Endpoint.CHAT_COMPLETIONS:
+            body = payloads.groq_chat_body(body, ex.seq)
         ex.summary.update(_summarize(ex.endpoint, body))
         return _Answer(status, body, headers)
 
@@ -330,10 +407,14 @@ def create_mock_app(
     max_requests: int = DEFAULT_MAX_REQUESTS,
 ) -> FastAPI:
     """Build the mock. Routes: ``GET {base}/models``, ``POST {base}/responses``,
-    ``POST {base}/chat/completions``; anything else is a recorded 404/405."""
+    ``POST {base}/chat/completions`` (BharatCode behaviour) and the same three under
+    ``/openai/v1`` (Groq behaviour, ADR-038); anything else is a recorded 404/405."""
     service = _MockService(script, recorder, fake_key, max_requests)
     base = "/" + base_path.strip("/") if base_path.strip("/") else ""
+    if base == GROQ_ROUTE_PREFIX:
+        raise ValueError(f"base_path {GROQ_ROUTE_PREFIX} is reserved for the Groq routes")
     app = FastAPI(title="FlightCheck mock", docs_url=None, redoc_url=None, openapi_url=None)
+    groq = GROQ_ROUTE_PREFIX
 
     @app.get(f"{base}/models")
     async def list_models(request: Request) -> Response:
@@ -347,9 +428,23 @@ def create_mock_app(
     async def chat_completions(request: Request) -> Response:
         return await service.handle(request, Endpoint.CHAT_COMPLETIONS)
 
+    @app.get(f"{groq}/models")
+    async def groq_list_models(request: Request) -> Response:
+        return await service.handle(request, Endpoint.MODELS, groq=True)
+
+    @app.post(f"{groq}/responses")
+    async def groq_responses(request: Request) -> Response:
+        return await service.handle(request, Endpoint.RESPONSES, groq=True)
+
+    @app.post(f"{groq}/chat/completions")
+    async def groq_chat_completions(request: Request) -> Response:
+        return await service.handle(request, Endpoint.CHAT_COMPLETIONS, groq=True)
+
     @app.exception_handler(StarletteHTTPException)
     async def unknown_route(request: Request, exc: StarletteHTTPException) -> Response:
         status = exc.status_code if exc.status_code in (404, 405) else 404
-        return await service.handle(request, None, status)
+        path = request.url.path
+        on_groq = path == groq or path.startswith(f"{groq}/")
+        return await service.handle(request, None, status, groq=on_groq)
 
     return app

@@ -16,7 +16,12 @@ from types import TracebackType
 import uvicorn
 
 from flightcheck.core.errors import FlightCheckError
-from flightcheck.mock.app import DEFAULT_BASE_PATH, DEFAULT_MAX_REQUESTS, create_mock_app
+from flightcheck.mock.app import (
+    DEFAULT_BASE_PATH,
+    DEFAULT_MAX_REQUESTS,
+    GROQ_ROUTE_PREFIX,
+    create_mock_app,
+)
 from flightcheck.mock.faults import FaultScript
 from flightcheck.mock.recorder import TrafficRecorder
 
@@ -78,6 +83,12 @@ class MockServer:
     @property
     def base_url(self) -> str:
         return self.origin + self._base_path
+
+    @property
+    def groq_base_url(self) -> str:
+        """``<origin>/openai/v1``: the Groq routes, as the OpenAI SDK's base URL (contract K4).
+        A groq-SDK client takes :attr:`origin` instead (it adds ``/openai/v1`` itself)."""
+        return self.origin + GROQ_ROUTE_PREFIX
 
     def start(self) -> MockServer:
         if self._thread is not None:

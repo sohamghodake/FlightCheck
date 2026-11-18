@@ -17,8 +17,14 @@ Status rules (ADR-018, plan §21.2, §20.14):
   value, parsed once into :class:`Expectation` (ADR-030); without one they are
   ``needs_review``, and a timeout never decides them. FC-RT-022/023 are traffic checks.
 
-The documented 400s come from ``core.contract.responses_contract_violations`` (shared with the
-mock and the adapter), the limits from ``core.config``; nothing here re-implements them.
+The documented 400s come from ``core.contract`` (shared with the mock and the adapter), the
+limits from ``core.config``; nothing here re-implements them.
+
+Provider (ADR-038): ``CheckConfig.provider`` is the run's provider. BharatCode runs keep every
+message and status rule unchanged. Groq runs evaluate the Groq every-scenario checks
+(``scenarios.GROQ_EVERY_SCENARIO_CHECK_IDS``), judge FC-RT-006/007 against Groq's dated catalogue,
+and word messages from docs/GROQ_CONTRACT.md (row IDs cited; [UNVERIFIED] rows stay labelled).
+Titles, remediation and documentation links per provider come from :func:`meta_for`.
 """
 
 from __future__ import annotations
@@ -33,11 +39,21 @@ from typing import Any
 from flightcheck.core.config import (
     BHARATCODE_DOCUMENTED_MODELS,
     BHARATCODE_PRO_ONLY_MODEL,
+    GROQ_CATALOGUE_DATE,
+    GROQ_DECOMMISSIONED_MODELS,
+    GROQ_MODELS,
     MAX_OUTPUT_TOKENS_CAP,
     ExpectConfig,
+    RuntimeProvider,
     TestConfig,
 )
-from flightcheck.core.contract import responses_contract_violations
+from flightcheck.core.contract import (
+    GROQ_BUILTIN_TOOL_TYPES,
+    GROQ_DOCUMENTED_TOOL_TYPES,
+    Violation,
+    groq_responses_contract_violations,
+    responses_contract_violations,
+)
 from flightcheck.core.models import (
     AppRun,
     CheckResult,
@@ -54,7 +70,8 @@ from flightcheck.core.models import (
 from flightcheck.runtime.harness import TRUNCATION_MARK
 from flightcheck.runtime.scenarios import (
     BUSY_STEP_PREFIX,
-    EVERY_SCENARIO_CHECK_IDS,
+    RATE_LIMIT_STEP_ID,
+    REPORTED_ONCE_CHECK_IDS,
     STREAM_FAIL_STEP_ID,
     TOOL_STEP_ID,
     TRUNCATE_STEP_ID,
@@ -64,6 +81,21 @@ from flightcheck.runtime.scenarios import (
 )
 
 DOC_URL = "https://bharatcode.ai/build"
+# Groq pages each check's contract rows come from (docs/GROQ_CONTRACT.md "Sources").
+_GROQ_DOCS = "https://console.groq.com/docs"
+GROQ_DOC_RESPONSES = f"{_GROQ_DOCS}/responses-api"
+GROQ_DOC_MODELS = f"{_GROQ_DOCS}/models"
+GROQ_DOC_API = f"{_GROQ_DOCS}/api-reference"
+GROQ_DOC_LOCAL_TOOLS = f"{_GROQ_DOCS}/tool-use/local-tool-calling"
+GROQ_DOC_BUILTIN = f"{_GROQ_DOCS}/tool-use/built-in-tools"
+GROQ_DOC_ERRORS = f"{_GROQ_DOCS}/errors"
+GROQ_DOC_RATE_LIMITS = f"{_GROQ_DOCS}/rate-limits"
+GROQ_DOC_SECURITY = f"{_GROQ_DOCS}/production-readiness/security-onboarding"
+GROQ_DOC_CHECKLIST = f"{_GROQ_DOCS}/production-readiness/production-ready-checklist"
+GROQ_DATE = GROQ_CATALOGUE_DATE
+BHARATCODE_ONLY: frozenset[str] = frozenset({"bharatcode"})
+GROQ_ONLY: frozenset[str] = frozenset({"groq"})
+BOTH: frozenset[str] = frozenset({"bharatcode", "groq"})
 NO_TRAFFIC_REASON = (
     "no traffic observed — the app may be using a different base URL variable, failed before "
     "calling the API, or was not given input"
@@ -81,10 +113,18 @@ _MODEL_ENDPOINTS = (Endpoint.RESPONSES, Endpoint.CHAT_COMPLETIONS)
 
 @dataclass(frozen=True)
 class CheckMeta:
+    """One check. ``title``/``remediation`` are the BharatCode texts (or the only texts of a
+    Groq-only check); ``groq_*`` replace them on Groq runs when set. ``providers`` is the
+    gating table's row (ADR-038): the runs the check is evaluated on."""
+
     id: str
     title: str
     severity: Severity
     remediation: str
+    providers: frozenset[str] = BOTH
+    groq_title: str | None = None
+    groq_remediation: str | None = None
+    groq_doc_url: str | None = None
 
 
 class ExpectKind(StrEnum):
@@ -150,6 +190,7 @@ class CheckConfig:
     recording_complete: bool = True
     missing_records: int = 0  # TrafficRecorder.dropped + record_failures
     aborted_for_limit: bool = False  # FlightCheck stopped the app after max_requests
+    provider: RuntimeProvider = "bharatcode"  # the run's provider (ADR-038)
     expectations: Expectations = field(init=False)
 
     def __post_init__(self) -> None:
@@ -168,6 +209,7 @@ CHECKS: dict[str, CheckMeta] = {
             "store is false on /responses",
             Severity.HIGH,
             "Send store=false on every /responses request and replay history in input.",
+            providers=BHARATCODE_ONLY,
         ),
         CheckMeta(
             "FC-RT-002",
@@ -175,6 +217,10 @@ CHECKS: dict[str, CheckMeta] = {
             Severity.HIGH,
             "Remove previous_response_id; the Responses API is stateless on BharatCode: replay "
             "prior turns and output items in input.",
+            groq_remediation="Remove previous_response_id: Groq lists it as not supported on "
+            "/responses (contract R4) and the API is not stateful (R3), so replay prior turns "
+            "and output items in input.",
+            groq_doc_url=GROQ_DOC_RESPONSES,
         ),
         CheckMeta(
             "FC-RT-003",
@@ -182,24 +228,32 @@ CHECKS: dict[str, CheckMeta] = {
             Severity.HIGH,
             'Replace hosted tools with your own {"type": "function"} tools and run them in '
             "your app.",
+            providers=BHARATCODE_ONLY,
         ),
         CheckMeta(
             "FC-RT-004",
             "No background mode",
             Severity.HIGH,
             "Remove background=true and run the request synchronously.",
+            providers=BHARATCODE_ONLY,
         ),
         CheckMeta(
             "FC-RT-005",
             "Supported input modalities",
             Severity.HIGH,
             "Send text or image input only; audio, video and file input are not supported.",
+            providers=BHARATCODE_ONLY,
         ),
         CheckMeta(
             "FC-RT-006",
             "Output budget ≤ 32 000",
             Severity.MEDIUM,
             f"Keep max_output_tokens / max_tokens at or below {MAX_OUTPUT_TOKENS_CAP}.",
+            groq_title="Output budget within the model's maximum",
+            groq_remediation="Keep max_completion_tokens (Chat) / max_output_tokens (Responses) "
+            "within the model's documented maximum completion tokens (Groq's models page; "
+            f"FlightCheck's catalogue is dated {GROQ_DATE}).",
+            groq_doc_url=GROQ_DOC_MODELS,
         ),
         CheckMeta(
             "FC-RT-007",
@@ -207,6 +261,11 @@ CHECKS: dict[str, CheckMeta] = {
             Severity.MEDIUM,
             "Use a documented model ID (qwen-3.8-27b, or deepseek-v4.1-flash on Pro) and "
             "always send model.",
+            groq_title="Model in Groq's catalogue",
+            groq_remediation="Always send model, and use a model from Groq's catalogue that is "
+            "not decommissioned (GET /models lists the models active for your key, contract "
+            f"M2, M6; FlightCheck's catalogue is dated {GROQ_DATE}).",
+            groq_doc_url=GROQ_DOC_MODELS,
         ),
         CheckMeta(
             "FC-RT-008",
@@ -216,10 +275,23 @@ CHECKS: dict[str, CheckMeta] = {
             "non-zero exit usually means a setup or parsing problem.",
         ),
         CheckMeta(
+            "FC-RT-009",
+            "store is not true on /responses",
+            Severity.HIGH,
+            "Omit store or send store=false on /responses: Groq accepts only false or null "
+            "(contract R5) and keeps no state, so replay the conversation in input (R3).",
+            providers=GROQ_ONLY,
+            groq_doc_url=GROQ_DOC_RESPONSES,
+        ),
+        CheckMeta(
             "FC-RT-011",
             "App continues after a tool call",
             Severity.INFO,
             "After running a function call, send a follow-up request with its result.",
+            groq_remediation="After running a function call, send a follow-up request with "
+            'its result (Chat: a role "tool" message with the call\'s tool_call_id, contract '
+            "T5).",
+            groq_doc_url=GROQ_DOC_LOCAL_TOOLS,
         ),
         CheckMeta(
             "FC-RT-012",
@@ -227,6 +299,10 @@ CHECKS: dict[str, CheckMeta] = {
             Severity.HIGH,
             "Echo the call_id from the function_call item (Chat: tool_call_id from tool_calls) "
             "in the tool result; never hard-code it.",
+            groq_remediation="Echo the call's id as the tool message's tool_call_id (Groq "
+            "requires them to match, contract T5; on /responses echo the function_call's "
+            "call_id, the OpenAI convention, [UNVERIFIED] for Groq: T10); never hard-code it.",
+            groq_doc_url=GROQ_DOC_LOCAL_TOOLS,
         ),
         CheckMeta(
             "FC-RT-013",
@@ -234,6 +310,9 @@ CHECKS: dict[str, CheckMeta] = {
             Severity.HIGH,
             "Serialise tool results to a string (for example json.dumps(result)) before "
             "sending them.",
+            groq_remediation="Send tool results as strings, for example json.dumps(result), "
+            "as Groq recommends (contract T5).",
+            groq_doc_url=GROQ_DOC_LOCAL_TOOLS,
         ),
         CheckMeta(
             "FC-RT-014",
@@ -242,6 +321,22 @@ CHECKS: dict[str, CheckMeta] = {
             "In the follow-up, send the original input plus the response's output items "
             "(including the function_call) before the function_call_output, and resend the "
             "tool definitions you still need.",
+            groq_remediation="In the follow-up, replay the conversation: on Chat the assistant "
+            "message with its tool_calls, then one tool message per call (contract T4, T5); on "
+            "/responses the original input plus the output items before the "
+            "function_call_output (Groq's Responses API is not stateful, R3). Resend the tool "
+            "definitions you still need.",
+            groq_doc_url=GROQ_DOC_LOCAL_TOOLS,
+        ),
+        CheckMeta(
+            "FC-RT-015",
+            "Only tools the model supports",
+            Severity.HIGH,
+            "Use function tools you run yourself; Groq's built-in browser_search and "
+            "code_interpreter work only on openai/gpt-oss-20b and openai/gpt-oss-120b (contract "
+            f"R9, T8; models as listed on {GROQ_DATE}).",
+            providers=GROQ_ONLY,
+            groq_doc_url=GROQ_DOC_BUILTIN,
         ),
         CheckMeta(
             "FC-RT-020",
@@ -250,6 +345,11 @@ CHECKS: dict[str, CheckMeta] = {
             'Check status == "incomplete" (Chat: finish_reason == "length"), keep the partial '
             "output and surface the truncation (for example exit non-zero); set [test.expect] "
             "on_truncation so FlightCheck can verify it.",
+            groq_remediation='Check finish_reason == "length" (Chat) or status == "incomplete" '
+            "(Responses, where the budget includes reasoning tokens: contract C11, R10), keep "
+            "the partial output and surface the truncation (for example exit non-zero); set "
+            "[test.expect] on_truncation so FlightCheck can verify it.",
+            groq_doc_url=GROQ_DOC_API,
         ),
         CheckMeta(
             "FC-RT-022",
@@ -258,6 +358,12 @@ CHECKS: dict[str, CheckMeta] = {
             'Do not run a function call from a truncated response (status "incomplete" / '
             'finish_reason "length"): its arguments may be cut off. Raise the output budget '
             "or ask again instead.",
+            groq_remediation="FlightCheck recommendation: do not run a function call from a "
+            'truncated response (finish_reason "length" / status "incomplete"), since its '
+            "arguments may be cut off; raise the output budget or ask again. Groq may instead "
+            "reject an invalid generated tool call with HTTP 400 and error.failed_generation "
+            "(contract T6): handle that too.",
+            groq_doc_url=GROQ_DOC_LOCAL_TOOLS,
         ),
         CheckMeta(
             "FC-RT-023",
@@ -265,6 +371,9 @@ CHECKS: dict[str, CheckMeta] = {
             Severity.MEDIUM,
             "Do not resend the same request after a truncation (the same budget runs out "
             "again): raise max_output_tokens, shorten the input or ask for a shorter answer.",
+            groq_remediation="FlightCheck recommendation: do not resend the same request after "
+            "a truncation, since the same budget runs out again; raise max_completion_tokens / "
+            "max_output_tokens, shorten the input or ask for a shorter answer.",
         ),
         CheckMeta(
             "FC-RT-030",
@@ -273,18 +382,42 @@ CHECKS: dict[str, CheckMeta] = {
             "Treat response.failed, an error event or a stream that ends without a terminal "
             "event as a failure: discard the partial output, then surface the error or retry; "
             "set [test.expect] on_stream_failure so FlightCheck can verify it.",
+            groq_remediation="Treat a Chat stream that ends without a finish_reason or brings a "
+            "chunk with x_groq.error (contract ST3), and on /responses a response.failed event "
+            "or a stream without a terminal event, as a failure: discard the partial output, "
+            "then surface the error or retry (Groq asks apps to handle streaming errors "
+            "gracefully, ST5); set [test.expect] on_stream_failure so FlightCheck can verify "
+            "it.",
+            groq_doc_url=GROQ_DOC_CHECKLIST,
         ),
         CheckMeta(
             "FC-RT-040",
             "Busy 503 is retried",
             Severity.MEDIUM,
             "Retry a 503 (model busy) after a pause, a bounded number of times.",
+            groq_title="503 is retried",
+            groq_remediation="Retry a 503 after a pause (Groq's errors page says to wait before "
+            "retrying, contract E3), a bounded number of times.",
+            groq_doc_url=GROQ_DOC_ERRORS,
         ),
         CheckMeta(
             "FC-RT-041",
             "Retry backoff present",
             Severity.LOW,
             "Wait before retrying a 503; BharatCode says to wait a few seconds.",
+            groq_remediation="Wait before retrying: Groq recommends exponential backoff with "
+            "jitter for 429 and 5xx errors (contract E9).",
+            groq_doc_url=GROQ_DOC_SECURITY,
+        ),
+        CheckMeta(
+            "FC-RT-044",
+            "429 retry waits for retry-after",
+            Severity.MEDIUM,
+            "After a 429, wait at least the retry-after seconds before the next request (Groq "
+            "sets retry-after only on 429, contract E5); the OpenAI and groq SDKs honour it in "
+            "their built-in retries (K6).",
+            providers=GROQ_ONLY,
+            groq_doc_url=GROQ_DOC_RATE_LIMITS,
         ),
         CheckMeta(
             "FC-RT-050",
@@ -301,6 +434,21 @@ CHECKS: dict[str, CheckMeta] = {
         ),
     )
 }
+
+
+def meta_for(check_id: str, provider: RuntimeProvider) -> tuple[str, str, str | None]:
+    """``(title, remediation, doc_url)`` of a check on a run of ``provider`` (ADR-038).
+    BharatCode runs get the original texts and ``DOC_URL``; Groq runs the ``groq_*`` texts
+    where set and the Groq page the check's contract rows come from (``None`` for checks with
+    no Groq basis, such as FlightCheck's own recommendations)."""
+    meta = CHECKS[check_id]
+    if provider != "groq":
+        return meta.title, meta.remediation, DOC_URL
+    return (
+        meta.groq_title or meta.title,
+        meta.groq_remediation or meta.remediation,
+        meta.groq_doc_url,
+    )
 
 
 # --- Shared helpers -------------------------------------------------------------------------
@@ -509,12 +657,20 @@ def _traffic_check(check_id: str) -> Callable[[Validator], Validator]:
 _RESPONSES_ONLY = "no /responses request with a JSON body was observed (this check applies to "
 
 
-def _violating(exchanges: Sequence[RecordedExchange], field: str) -> list[RecordedExchange]:
+def _violations(body: dict[str, Any], provider: RuntimeProvider = "bharatcode") -> list[Violation]:
+    if provider == "groq":
+        return groq_responses_contract_violations(body)
+    return responses_contract_violations(body)
+
+
+def _violating(
+    exchanges: Sequence[RecordedExchange], field: str, provider: RuntimeProvider = "bharatcode"
+) -> list[RecordedExchange]:
     return [
         e
         for e in exchanges
         if e.request_json is not None
-        and any(v.field == field for v in responses_contract_violations(e.request_json))
+        and any(v.field == field for v in _violations(e.request_json, provider))
     ]
 
 
@@ -526,19 +682,26 @@ def _contract_field_check(
     *,
     what: str,
     excerpt: Callable[[dict[str, Any]], Any],
+    provider: RuntimeProvider = "bharatcode",
+    groq_basis: str = "",
 ) -> CheckResult:
     responses, _ = split_endpoints(exchanges)
     if not responses:
         return skipped(check_id, scenario, _RESPONSES_ONLY + "/responses)")
-    bad = _violating(responses, field)
+    bad = _violating(responses, field, provider)
     if bad:
+        basis = (
+            groq_basis
+            if provider == "groq"
+            else "BharatCode documents this as unsupported (HTTP 400), and the mock answered "
+            "as documented."
+        )
         return _result(
             check_id,
             scenario,
             CheckStatus.FAILED,
             f"{len(bad)} of {len(responses)} /responses request(s) sent {what} (seq "
-            f"{_seqs(bad)}); BharatCode documents this as unsupported (HTTP 400), and the mock "
-            "answered as documented.",
+            f"{_seqs(bad)}); {basis}",
             expected=f"no {what}",
             observed=f"{what} in {len(bad)} request(s)",
             evidence=[
@@ -633,6 +796,10 @@ def check_rt002(
         scenario,
         what="previous_response_id",
         excerpt=lambda body: {"previous_response_id": body.get("previous_response_id")},
+        provider=config.provider,
+        groq_basis="Groq lists previous_response_id as not supported on /responses and keeps "
+        "no state (contract R3, R4). Whether Groq rejects it is [UNVERIFIED]; the mock answered "
+        "HTTP 400, labelled [UNVERIFIED].",
     )
 
 
@@ -717,6 +884,8 @@ def check_rt006(
     requests = by_seq([*responses, *chat])
     if not requests:
         return skipped(cid, scenario, "no /responses or /chat/completions request was observed")
+    if config.provider == "groq":
+        return _groq_budget(requests, scenario)
     over: list[tuple[RecordedExchange, str, int]] = []
     odd: list[tuple[RecordedExchange, str, Any]] = []
     for exchange in requests:
@@ -778,6 +947,8 @@ def check_rt007(
     requests = by_seq([*responses, *chat])
     if not requests:
         return skipped(cid, scenario, "no /responses or /chat/completions request was observed")
+    if config.provider == "groq":
+        return _groq_models(requests, scenario)
     missing = [e for e in requests if not isinstance((e.request_json or {}).get("model"), str)]
     unknown = [
         e
@@ -825,6 +996,312 @@ def check_rt007(
         expected=" or ".join(sorted(BHARATCODE_DOCUMENTED_MODELS)),
         observed=", ".join(models),
         evidence=_checked_evidence(requests, "documented model"),
+    )
+
+
+def _groq_budget(requests: Sequence[RecordedExchange], scenario: Scenario) -> CheckResult:
+    """FC-RT-006 on Groq: each budget against its model's documented maximum (§1.8)."""
+    cid = "FC-RT-006"
+    over: list[tuple[RecordedExchange, str, int, str, int]] = []
+    odd: list[tuple[RecordedExchange, str, Any]] = []
+    unknown: list[tuple[RecordedExchange, str, Any]] = []
+    for exchange in requests:
+        body = exchange.request_json or {}
+        assert exchange.endpoint is not None
+        model = body.get("model")
+        facts = GROQ_MODELS.get(model) if isinstance(model, str) else None
+        for key in _BUDGET_KEYS[exchange.endpoint]:
+            if key not in body or body[key] is None:
+                continue
+            value = body[key]
+            if not isinstance(value, int) or isinstance(value, bool):
+                odd.append((exchange, key, value))
+            elif facts is None or facts.max_completion_tokens is None:
+                unknown.append((exchange, key, model))
+            elif value > facts.max_completion_tokens:
+                assert isinstance(model, str)
+                over.append((exchange, key, value, model, facts.max_completion_tokens))
+    if over:
+        limits = sorted({f"{m} allows {limit}" for _, _, _, m, limit in over})
+        return _result(
+            cid,
+            scenario,
+            CheckStatus.FAILED,
+            f"{len(over)} request(s) asked for more output tokens than the model's documented "
+            f"maximum (seq {_seqs(e for e, *_ in over)}): {'; '.join(limits)} (Groq's "
+            f"catalogue of {GROQ_DATE}, contract §1.8). What Groq does with a larger budget "
+            "is [UNVERIFIED].",
+            expected="≤ the model's maximum completion tokens",
+            observed=", ".join(f"{k}={v}" for _, k, v, _, _ in over[:_MAX_EVIDENCE]),
+            evidence=[
+                _traffic_evidence(e, _short({"model": m, k: v}))
+                for e, k, v, m, _ in over[:_MAX_EVIDENCE]
+            ],
+        )
+    if odd:
+        return _result(
+            cid,
+            scenario,
+            CheckStatus.NEEDS_REVIEW,
+            f"{len(odd)} request(s) sent an output budget that is not an integer (seq "
+            f"{_seqs(e for e, _, _ in odd)}).",
+            expected="an integer ≤ the model's maximum completion tokens",
+            observed=", ".join(f"{k}={_short(v)}" for _, k, v in odd[:_MAX_EVIDENCE]),
+            evidence=[_traffic_evidence(e, _short({k: v})) for e, k, v in odd[:_MAX_EVIDENCE]],
+        )
+    if unknown:
+        return _result(
+            cid,
+            scenario,
+            CheckStatus.NEEDS_REVIEW,
+            f"{len(unknown)} request(s) set an output budget with a model that is not in "
+            f"Groq's catalogue of {GROQ_DATE} (seq {_seqs(e for e, _, _ in unknown)}), so its "
+            "maximum is unknown (see FC-RT-007).",
+            expected="≤ the model's maximum completion tokens",
+            observed=", ".join(sorted({_short(m) for _, _, m in unknown})),
+            evidence=[
+                _traffic_evidence(e, _short({"model": m})) for e, _, m in unknown[:_MAX_EVIDENCE]
+            ],
+        )
+    return _result(
+        cid,
+        scenario,
+        CheckStatus.PASSED,
+        f"No request asked for more than its model's documented maximum completion tokens "
+        f"({len(requests)} checked; Groq's catalogue of {GROQ_DATE}).",
+        expected="≤ the model's maximum completion tokens",
+        observed=f"{len(requests)} request(s) checked",
+        evidence=_checked_evidence(requests, "output budget within the model's maximum or unset"),
+    )
+
+
+def _groq_models(requests: Sequence[RecordedExchange], scenario: Scenario) -> CheckResult:
+    """FC-RT-007 on Groq: the dated catalogue (§1.8), decommissioned IDs (M2)."""
+    cid = "FC-RT-007"
+
+    def model(e: RecordedExchange) -> Any:
+        return (e.request_json or {}).get("model")
+
+    missing = [e for e in requests if not isinstance(model(e), str)]
+    gone = [e for e in requests if e not in missing and model(e) in GROQ_DECOMMISSIONED_MODELS]
+    unknown = [
+        e for e in requests if e not in missing and e not in gone and model(e) not in GROQ_MODELS
+    ]
+    known = [e for e in requests if isinstance(model(e), str) and model(e) in GROQ_MODELS]
+    enterprise = [
+        e
+        for e in known
+        if GROQ_MODELS[model(e)].enterprise_only and GROQ_MODELS[model(e)].tier == "production"
+    ]
+    expected = f"a model in Groq's catalogue of {GROQ_DATE}"
+    if missing or gone or unknown:
+        bad = by_seq([*missing, *gone, *unknown])
+        models = sorted({_short(model(e)) for e in bad})
+        parts = []
+        if missing:
+            parts.append(f"no model in seq {_seqs(missing)} (model is required, contract C1)")
+        if gone:
+            parts.append(
+                f"decommissioned on Groq in seq {_seqs(gone)}: requests to decommissioned IDs "
+                "return errors (contract M2)"
+            )
+        if unknown:
+            parts.append(
+                f"not in Groq's catalogue of {GROQ_DATE} in seq {_seqs(unknown)} (contract §1.8; "
+                "the catalogue is a dated snapshot, GET /models lists the models active for "
+                "your key, M6)"
+            )
+        return _result(
+            cid,
+            scenario,
+            CheckStatus.FAILED,
+            f"{len(bad)} request(s) sent a model that is missing or not usable on Groq "
+            f"({', '.join(models)}): {'; '.join(parts)}.",
+            expected=expected,
+            observed=", ".join(models),
+            evidence=[_traffic_evidence(e, _short({"model": model(e)})) for e in bad[:10]],
+            severity=Severity.HIGH if gone else None,
+        )
+    if enterprise:
+        names = ", ".join(sorted({model(e) for e in enterprise}))
+        return _result(
+            cid,
+            scenario,
+            CheckStatus.NEEDS_REVIEW,
+            f"{names} is Enterprise-only on Groq (catalogue of {GROQ_DATE}): it was shut down "
+            "for free and developer tiers on 16 Aug 2026 (contract M2), so requests on those "
+            f"plans fail (seq {_seqs(enterprise)}); check that your plan includes it.",
+            expected="a model your plan includes",
+            observed=names,
+            evidence=[_traffic_evidence(e, model(e)) for e in enterprise[:_MAX_EVIDENCE]],
+            severity=Severity.INFO,
+        )
+    models = sorted({model(e) for e in requests})
+    preview = sorted({m for m in models if GROQ_MODELS[m].tier == "preview"})
+    note = (
+        f" Preview model(s) {', '.join(preview)} are for evaluation only and may be "
+        "discontinued at short notice (contract M1)."
+        if preview
+        else ""
+    )
+    return _result(
+        cid,
+        scenario,
+        CheckStatus.PASSED,
+        f"All {len(requests)} request(s) used a model in Groq's catalogue of {GROQ_DATE}: "
+        f"{', '.join(models)}.{note}",
+        expected=expected,
+        observed=", ".join(models),
+        evidence=_checked_evidence(requests, "model in Groq's catalogue"),
+    )
+
+
+# --- FC-RT-009, FC-RT-015: Groq request contract (every scenario on Groq runs) ---------------
+
+
+@_traffic_check("FC-RT-009")
+def check_rt009(
+    exchanges: Sequence[RecordedExchange],
+    app_run: AppRun | None,
+    scenario: Scenario,
+    config: CheckConfig,
+) -> CheckResult:
+    """``store`` on /responses must be false, null or absent (contract R5)."""
+    cid = "FC-RT-009"
+    responses, _ = split_endpoints(exchanges)
+    if not responses:
+        return skipped(cid, scenario, _RESPONSES_ONLY + "/responses)")
+    bad = [e for e in responses if (e.request_json or {}).get("store") not in (False, None)]
+    if bad:
+        values = sorted({_short((e.request_json or {}).get("store")) for e in bad})
+        return _result(
+            cid,
+            scenario,
+            CheckStatus.FAILED,
+            f"{len(bad)} of {len(responses)} /responses request(s) sent store="
+            f"{', '.join(values)} (seq {_seqs(bad)}); Groq accepts only store=false or null "
+            "(contract R5) and keeps no state. Whether Groq rejects store=true is "
+            "[UNVERIFIED]; the mock answers it with HTTP 400, labelled [UNVERIFIED].",
+            expected="store false, null or omitted",
+            observed=f"store={', '.join(values)} in {len(bad)} request(s)",
+            evidence=[
+                _traffic_evidence(e, _short({"store": (e.request_json or {}).get("store")}))
+                for e in bad[:_MAX_EVIDENCE]
+            ],
+        )
+    return _result(
+        cid,
+        scenario,
+        CheckStatus.PASSED,
+        f"None of the {len(responses)} /responses request(s) sent store other than false or "
+        "null (omitting it is fine: Groq's default is false, contract R5).",
+        expected="store false, null or omitted",
+        observed=f"{len(responses)} request(s) checked",
+        evidence=_checked_evidence(responses, "store false or omitted"),
+    )
+
+
+def _tool_types(body: dict[str, Any]) -> set[str]:
+    tools = body.get("tools")
+    if not isinstance(tools, list):
+        return set()
+    return {t["type"] for t in tools if isinstance(t, dict) and isinstance(t.get("type"), str)}
+
+
+@_traffic_check("FC-RT-015")
+def check_rt015(
+    exchanges: Sequence[RecordedExchange],
+    app_run: AppRun | None,
+    scenario: Scenario,
+    config: CheckConfig,
+) -> CheckResult:
+    """Tool types against what Groq documents (R9, T8): function and mcp tools anywhere;
+    browser_search / code_interpreter only on catalogue models with built-in tools."""
+    cid = "FC-RT-015"
+    responses, chat = split_endpoints(exchanges)
+    requests = by_seq([*responses, *chat])
+    if not requests:
+        return skipped(cid, scenario, "no /responses or /chat/completions request was observed")
+    undocumented: list[tuple[RecordedExchange, list[str]]] = []
+    wrong_model: list[tuple[RecordedExchange, list[str], str]] = []
+    unknown_model: list[tuple[RecordedExchange, list[str], Any]] = []
+    for exchange in requests:
+        body = exchange.request_json or {}
+        types = _tool_types(body)
+        extra = sorted(types - GROQ_DOCUMENTED_TOOL_TYPES)
+        if extra:
+            undocumented.append((exchange, extra))
+        builtin = sorted(types & GROQ_BUILTIN_TOOL_TYPES)
+        if not builtin:
+            continue
+        model = body.get("model")
+        facts = GROQ_MODELS.get(model) if isinstance(model, str) else None
+        if facts is None:
+            unknown_model.append((exchange, builtin, model))
+        elif not facts.builtin_tools:
+            assert isinstance(model, str)
+            wrong_model.append((exchange, builtin, model))
+    if undocumented or wrong_model:
+        parts = []
+        evidence = []
+        if undocumented:
+            names = sorted({t[:80] for _, ts in undocumented for t in ts})
+            parts.append(
+                f"tool type {', '.join(names)} (seq {_seqs(e for e, _ in undocumented)}) is not "
+                "one Groq documents"
+            )
+            evidence += [
+                _traffic_evidence(e, _short({"tool_types": ts}))
+                for e, ts in undocumented[:_MAX_EVIDENCE]
+            ]
+        if wrong_model:
+            pairs = sorted({f"{', '.join(ts)} with {m}" for _, ts, m in wrong_model})
+            parts.append(
+                f"built-in tool {'; '.join(pairs)} (seq {_seqs(e for e, _, _ in wrong_model)}): "
+                "Groq documents built-in tools only on openai/gpt-oss-20b and "
+                f"openai/gpt-oss-120b (models as listed on {GROQ_DATE})"
+            )
+            evidence += [
+                _traffic_evidence(e, _short({"model": m, "tool_types": ts}))
+                for e, ts, m in wrong_model[:_MAX_EVIDENCE]
+            ]
+        return _result(
+            cid,
+            scenario,
+            CheckStatus.FAILED,
+            f"{'; '.join(parts)}. Groq documents function tools, the built-in browser_search "
+            "and code_interpreter, and remote mcp tools (contract R9, T8); what Groq answers "
+            "for other tools is [UNVERIFIED].",
+            expected="function/mcp tools, built-in tools only on GPT-OSS models",
+            observed="; ".join(parts),
+            evidence=evidence,
+        )
+    if unknown_model:
+        models = sorted({_short(m) for _, _, m in unknown_model})
+        return _result(
+            cid,
+            scenario,
+            CheckStatus.NEEDS_REVIEW,
+            f"Built-in tools were sent with model(s) {', '.join(models)} (seq "
+            f"{_seqs(e for e, _, _ in unknown_model)}), which are not in Groq's catalogue of "
+            f"{GROQ_DATE}; whether they support built-in tools is unknown (see FC-RT-007).",
+            expected="built-in tools only on GPT-OSS models",
+            observed=", ".join(models),
+            evidence=[
+                _traffic_evidence(e, _short({"model": m, "tool_types": ts}))
+                for e, ts, m in unknown_model[:_MAX_EVIDENCE]
+            ],
+        )
+    with_tools = [e for e in requests if _tool_types(e.request_json or {})]
+    return _result(
+        cid,
+        scenario,
+        CheckStatus.PASSED,
+        f"Every tool sent is one the request's model supports ({len(requests)} request(s) "
+        f"checked, {len(with_tools)} with tools).",
+        expected="function/mcp tools, built-in tools only on GPT-OSS models",
+        observed=f"{len(with_tools)} request(s) with tools",
+        evidence=_checked_evidence(requests, "supported tool types"),
     )
 
 
@@ -1020,9 +1497,18 @@ def check_rt012(
     sent_any = [(f, r) for f in rnd.followups for r in tool_results(f)]
     if sent_any:
         seen = sorted({_short(r.call_id) for _, r in sent_any})
+        if config.provider == "groq":
+            basis = (
+                "Groq requires a tool message's tool_call_id to match the call's id (contract T5)"
+                if rnd.tool.endpoint is Endpoint.CHAT_COMPLETIONS
+                else "a function_call_output pairs with its call only by call_id (OpenAI "
+                "convention, [UNVERIFIED] for Groq: contract T10)"
+            )
+        else:
+            basis = "BharatCode pairs a result with its call only by call_id"
         message = (
             f"The tool result's call_id ({', '.join(seen)}) does not match the issued call_id "
-            f"({', '.join(issued)}); BharatCode pairs a result with its call only by call_id."
+            f"({', '.join(issued)}); {basis}."
         )
         evidence = [
             _traffic_evidence(f, f"tool result call_id={_short(r.call_id)}")
@@ -1067,6 +1553,8 @@ def check_rt013(
         (f, r) for f, r in not_string if r.style == "tool_message" and isinstance(r.output, list)
     ]
     wrong = [(f, r) for f, r in not_string if (f, r) not in chat_parts]
+    if config.provider == "groq":
+        return _groq_tool_output(cid, scenario, results, wrong, chat_parts)
     if wrong:
         kinds = sorted({type(r.output).__name__ for _, r in wrong})
         return _result(
@@ -1096,6 +1584,63 @@ def check_rt013(
             evidence=[
                 _traffic_evidence(f, _short({"tool_call_id": r.call_id}))
                 for f, r in chat_parts[:_MAX_EVIDENCE]
+            ],
+        )
+    return _result(
+        cid,
+        scenario,
+        CheckStatus.PASSED,
+        f"All {len(results)} tool result(s) were strings.",
+        expected="a JSON string",
+        observed="string",
+        evidence=[_traffic_evidence(f, _short({"call_id": r.call_id})) for f, r in results[:10]],
+    )
+
+
+def _groq_tool_output(
+    cid: str,
+    scenario: Scenario,
+    results: Sequence[tuple[RecordedExchange, ToolResult]],
+    wrong: Sequence[tuple[RecordedExchange, ToolResult]],
+    chat_parts: Sequence[tuple[RecordedExchange, ToolResult]],
+) -> CheckResult:
+    """FC-RT-013 on Groq. Chat: T5 documents a string, so another type is ``failed``; a list
+    of content parts may still be accepted ([UNVERIFIED]) → ``needs_review``. Responses: the
+    function_call_output format is the OpenAI convention, [UNVERIFIED] for Groq (T10), so a
+    non-string output is ``needs_review``."""
+    chat_wrong = [(f, r) for f, r in wrong if r.style == "tool_message"]
+    unverified = [*chat_parts, *[(f, r) for f, r in wrong if r.style != "tool_message"]]
+    if chat_wrong:
+        kinds = sorted({type(r.output).__name__ for _, r in chat_wrong})
+        return _result(
+            cid,
+            scenario,
+            CheckStatus.FAILED,
+            f"{len(chat_wrong)} Chat tool message(s) sent a {'/'.join(kinds)} instead of a "
+            f"string (seq {_seqs(f for f, _ in chat_wrong)}); Groq documents tool message "
+            "content as a string and recommends json.dumps for structured data (contract T5).",
+            expected="a JSON string",
+            observed=", ".join(kinds),
+            evidence=[
+                _traffic_evidence(f, _short({"tool_call_id": r.call_id, "content": r.output}))
+                for f, r in chat_wrong[:_MAX_EVIDENCE]
+            ],
+        )
+    if unverified:
+        kinds = sorted({type(r.output).__name__ for _, r in unverified})
+        return _result(
+            cid,
+            scenario,
+            CheckStatus.NEEDS_REVIEW,
+            f"{len(unverified)} tool result(s) sent a {'/'.join(kinds)} instead of a string "
+            f"(seq {_seqs(f for f, _ in unverified)}). Groq documents string content for Chat "
+            "tool messages (contract T5); whether a list of parts, or a non-string "
+            "function_call_output on /responses (T10), is accepted is [UNVERIFIED].",
+            expected="a JSON string",
+            observed=", ".join(kinds),
+            evidence=[
+                _traffic_evidence(f, _short({"call_id": r.call_id}))
+                for f, r in unverified[:_MAX_EVIDENCE]
             ],
         )
     return _result(
@@ -1185,7 +1730,19 @@ def check_rt014(
         ]
         if not assistant:
             problems.append(f"an assistant message whose tool_calls include {', '.join(issued)}")
-        unverified = " (Chat: OpenAI-compatible convention; BharatCode's behaviour is [UNVERIFIED])"
+        if config.provider != "groq":
+            unverified = (
+                " (Chat: OpenAI-compatible convention; BharatCode's behaviour is [UNVERIFIED])"
+            )
+    if config.provider == "groq":
+        if cont.endpoint is Endpoint.RESPONSES:
+            # R3 (replay history) is verified; the item format is the OpenAI convention (T10).
+            unverified = " (Responses item format: OpenAI convention, [UNVERIFIED] for Groq: T10)"
+            stateless = "Groq's Responses API is not stateful (contract R3)"
+        else:
+            stateless = "Groq's Chat tool round trip carries them in the messages (contract T4, T5)"
+    else:
+        stateless = "BharatCode keeps no state"
     evidence = [_traffic_evidence(rnd.tool, f"issued call_ids={', '.join(issued)}")]
     if problems:
         return _result(
@@ -1193,7 +1750,7 @@ def check_rt014(
             scenario,
             CheckStatus.FAILED,
             f"The continuation (seq {cont.seq}) does not replay {' and '.join(problems)}; "
-            f"BharatCode keeps no state, so the follow-up must carry them{unverified}.",
+            f"{stateless}, so the follow-up must carry them{unverified}.",
             expected="original input + output items + tool result",
             observed="missing: " + "; ".join(problems),
             evidence=[*evidence, _traffic_evidence(cont, "context not replayed")],
@@ -1251,12 +1808,19 @@ def _busy_attempts(
     return attempts, None
 
 
-def _sdk_note(retries: Sequence[RecordedExchange]) -> str:
+def _sdk_note(retries: Sequence[RecordedExchange], provider: RuntimeProvider = "bharatcode") -> str:
     counts = [sdk_retry_count(e) for e in retries]
     if counts and all(c is not None and c > 0 for c in counts):
+        shown = ", ".join(str(c) for c in counts)
+        if provider == "groq":
+            return (
+                f" The retries carry x-stainless-retry-count ({shown}), which the OpenAI and "
+                "groq SDKs send (contract K6): the SDK's built-in retries (2 by default in "
+                "both, K5) did the retrying, which may or may not be deliberate."
+            )
         return (
             " The retries carry the OpenAI SDK's x-stainless-retry-count header "
-            f"({', '.join(str(c) for c in counts)}): the SDK's built-in retries "
+            f"({shown}): the SDK's built-in retries "
             "(DEFAULT_MAX_RETRIES = 2, openai/_constants.py) did the retrying, which may or may "
             "not be deliberate."
         )
@@ -1275,12 +1839,18 @@ def check_rt040(
     if blocked is not None:
         return blocked
     if len(attempts) == 1:
+        what = (
+            "the 503 was not retried (Groq's errors page says to wait before retrying a 503, "
+            "contract E3)"
+            if config.provider == "groq"
+            else "the documented busy 503 was not retried"
+        )
         return _result(
             cid,
             scenario,
             CheckStatus.FAILED,
             f"Only one request was observed before the app stopped ({_exit_text(app_run)}): "
-            "the documented busy 503 was not retried.",
+            f"{what}.",
             expected="≥ 2 attempts",
             observed="1 attempt",
             evidence=[_traffic_evidence(attempts[0], "503 busy, no retry")],
@@ -1290,8 +1860,9 @@ def check_rt040(
         cid,
         scenario,
         CheckStatus.PASSED,
-        f"{len(attempts)} attempts after the busy 503 (seq {_seqs(attempts)}); the last got "
-        f"HTTP {last.response_status} ({_exit_text(app_run)}).{_sdk_note(attempts[1:])}",
+        f"{len(attempts)} attempts after the {'' if config.provider == 'groq' else 'busy '}503 "
+        f"(seq {_seqs(attempts)}); the last got HTTP {last.response_status} "
+        f"({_exit_text(app_run)}).{_sdk_note(attempts[1:], config.provider)}",
         expected="≥ 2 attempts",
         observed=f"{len(attempts)} attempts",
         evidence=_checked_evidence(attempts, "attempt"),
@@ -1319,15 +1890,25 @@ def check_rt041(
     gaps = gaps_ms(attempts)
     shown = ", ".join(f"{g} ms" for g in gaps)
     evidence = _checked_evidence(attempts, "attempt")
-    note = _sdk_note(attempts[1:])
+    note = _sdk_note(attempts[1:], config.provider)
+    advice = (
+        "Groq recommends exponential backoff with jitter for 429 and 5xx errors (contract E9), "
+        "so check that this backoff is what you want"
+        if config.provider == "groq"
+        else "BharatCode asks clients to wait a few seconds before retrying a 503, so consider "
+        "a longer backoff"
+    )
     if note:
+        sdk_backoff = (
+            "The OpenAI SDK's backoff starts at 375–500 ms (the groq SDK's at 0.5 s, K5)"
+            if config.provider == "groq"
+            else "Its backoff starts at 375–500 ms"
+        )
         return _result(
             cid,
             scenario,
             CheckStatus.NEEDS_REVIEW,
-            f"Gaps between attempts: {shown}.{note} Its backoff starts at 375–500 ms; "
-            "BharatCode asks clients to wait a few seconds before retrying a 503, so consider "
-            "a longer backoff.",
+            f"Gaps between attempts: {shown}.{note} {sdk_backoff}; {advice}.",
             expected=f"each gap ≥ {MIN_BACKOFF_MS} ms",
             observed=shown,
             evidence=evidence,
@@ -1339,7 +1920,11 @@ def check_rt041(
             scenario,
             CheckStatus.FAILED,
             f"The app retried after {min(short)} ms (gaps: {shown}); wait before retrying a "
-            "busy 503.",
+            + (
+                "503 (Groq: wait before retrying, contract E3)."
+                if config.provider == "groq"
+                else "busy 503."
+            ),
             expected=f"each gap ≥ {MIN_BACKOFF_MS} ms",
             observed=shown,
             evidence=evidence,
@@ -1670,6 +2255,12 @@ def check_rt022(
     shown = ", ".join(issued)
     fault_ev = _traffic_evidence(fault, f"truncated call_ids={shown}")
     later = [e for e in model_exchanges(exchanges) if e.seq > fault.seq]
+    groq_note = (
+        " (FlightCheck recommendation. Whether Groq ever returns a cut-off tool call, or a 400 "
+        "with failed_generation instead, is [UNVERIFIED]: contract T6.)"
+        if config.provider == "groq"
+        else ""
+    )
     executed = [
         (e, r)
         for e in later
@@ -1685,7 +2276,7 @@ def check_rt022(
             f"The app sent a tool result (seq {seqs}) for {shown}, a function call cut off "
             f"inside a truncated response (seq {fault.seq}). Its arguments were incomplete, so "
             "that result was produced from partial input; the call should not have been "
-            "executed.",
+            f"executed.{groq_note}",
             expected=f"no tool result for {shown}",
             observed=f"tool result for {_short(sorted({r.call_id for _, r in executed}))}",
             evidence=[
@@ -1704,7 +2295,7 @@ def check_rt022(
         f"No later request carries a tool result for {shown} from the truncated response "
         f"(seq {fault.seq}; {len(later)} later request(s) checked). FlightCheck sees only "
         "traffic: whether the app ran the tool locally without sending a result is not "
-        "observable.",
+        f"observable.{groq_note}",
         expected=f"no tool result for {shown}",
         observed=f"{len(later)} later request(s), none with a result for {shown}",
         evidence=[fault_ev, *_checked_evidence(later, note)],
@@ -1770,6 +2361,20 @@ def check_rt030(
     summary = fault.response_summary
     if fault.stream and summary.get("finish") == "client_disconnected":
         text = "a stream the app disconnected from before the scripted failure"
+    elif fault.stream and summary.get("finish") == "x_groq_error":
+        deltas = summary.get("deltas")
+        count = f" after {deltas} text delta(s)" if isinstance(deltas, int) else ""
+        text = (
+            f"a Chat stream that stopped{count} with a chunk carrying x_groq.error (Groq's "
+            "mid-stream error field, contract ST3; the wire format is [UNVERIFIED])"
+        )
+    elif fault.stream and config.provider == "groq":
+        deltas = summary.get("deltas")
+        count = f" after {deltas} text delta(s)" if isinstance(deltas, int) else ""
+        text = (
+            f"a stream that failed{count} (response.failed: OpenAI's event, [UNVERIFIED] for "
+            "Groq: contract R15)"
+        )
     elif fault.stream:
         deltas = summary.get("deltas")
         count = f" after {deltas} text delta(s)" if isinstance(deltas, int) else ""
@@ -1793,7 +2398,7 @@ def check_rt030(
         f" A later request (seq {_seqs(retries)}) followed the failure, so the app (or its SDK) "
         "retried.{sdk} Discard any partial output from the failed attempt before using the "
         "retry's answer."
-    ).format(sdk=_sdk_note(retries))
+    ).format(sdk=_sdk_note(retries, config.provider))
     update: dict[str, Any] = {
         "message": result.message + reminder,
         "evidence": [*result.evidence, *_checked_evidence(retries, "retry after the failure")],
@@ -1801,6 +2406,102 @@ def check_rt030(
     if result.status is not CheckStatus.FAILED:
         update["severity"] = Severity.INFO  # §17.4: a retry is reported as info
     return result.model_copy(update=update)
+
+
+# --- FC-RT-044: 429 with retry-after (S11, Groq) -------------------------------------------
+
+
+def _retry_after_s(exchange: RecordedExchange) -> float | None:
+    value = exchange.response_summary.get("retry_after")
+    try:
+        seconds = float(value) if isinstance(value, str | int | float) else None
+    except ValueError:
+        return None
+    return seconds if seconds is not None and seconds >= 0 else None
+
+
+@_traffic_check("FC-RT-044")
+def check_rt044(
+    exchanges: Sequence[RecordedExchange],
+    app_run: AppRun | None,
+    scenario: Scenario,
+    config: CheckConfig,
+) -> CheckResult:
+    """The next model request after S11's 429 comes at least ``retry-after`` seconds later
+    (contract E5, K6). The gap runs from when the mock answered the 429 (``at_ms``) to when the
+    next request arrived (``received_ms``, recorded on Groq routes), so it never counts the
+    next request's own answer time and never overstates the app's wait."""
+    cid = "FC-RT-044"
+    fault = _fault_exchange(exchanges, (RATE_LIMIT_STEP_ID,))
+    if fault is None:
+        return _not_served(cid, exchanges, scenario, "rate-limit (429)")
+    wait_s = _retry_after_s(fault)
+    if fault.response_status != 429 or wait_s is None:
+        return skipped(
+            cid,
+            scenario,
+            f"the 429 with retry-after did not reach the app (HTTP {fault.response_status})",
+        )
+    need_ms = int(wait_s * 1000)
+    fault_ev = _traffic_evidence(fault, f"429, retry-after: {_short(wait_s)} s", note="the 429")
+    later = [e for e in model_exchanges(exchanges) if e.seq > fault.seq]
+    expected = f"next request ≥ {need_ms} ms after the 429"
+    if not later:
+        return _result(
+            cid,
+            scenario,
+            CheckStatus.NEEDS_REVIEW,
+            f"The mock answered 429 with retry-after: {_short(wait_s)} (seq {fault.seq}) and the "
+            f"app sent no further request ({_exit_text(app_run)}). That is right only if the app "
+            "does not intend to retry; Groq recommends retrying 429s with backoff (contract E9).",
+            expected=expected,
+            observed="no later request",
+            evidence=[fault_ev, *([] if app_run is None else _process_evidence(app_run))],
+        )
+    nxt = later[0]
+    arrived = nxt.response_summary.get("received_ms")
+    if not isinstance(arrived, int) or isinstance(arrived, bool):
+        return _result(
+            cid,
+            scenario,
+            CheckStatus.NEEDS_REVIEW,
+            f"The next request (seq {nxt.seq}) has no recorded arrival time, so the wait after "
+            "the 429 cannot be measured.",
+            expected=expected,
+            observed="arrival time not recorded",
+            evidence=[fault_ev, _traffic_evidence(nxt)],
+        )
+    gap = arrived - fault.at_ms
+    retry = sdk_retry_count(nxt)
+    sdk = (
+        f" It carries x-stainless-retry-count {retry}: the SDK's built-in retry (OpenAI and "
+        "groq SDKs honour retry-after, contract K6) did the waiting."
+        if retry is not None and retry > 0
+        else ""
+    )
+    evidence = [fault_ev, _traffic_evidence(nxt, f"arrived {gap} ms after the 429")]
+    if gap >= need_ms:
+        return _result(
+            cid,
+            scenario,
+            CheckStatus.PASSED,
+            f"The next request (seq {nxt.seq}) arrived {gap} ms after the 429, respecting its "
+            f"retry-after of {_short(wait_s)} s (contract E5).{sdk}",
+            expected=expected,
+            observed=f"{gap} ms",
+            evidence=evidence,
+        )
+    return _result(
+        cid,
+        scenario,
+        CheckStatus.FAILED,
+        f"The next request (seq {nxt.seq}) arrived {gap} ms after the 429, before its "
+        f"retry-after of {_short(wait_s)} s ran out (contract E5: Groq sends retry-after on "
+        f"429; E9: back off).{sdk}",
+        expected=expected,
+        observed=f"{gap} ms",
+        evidence=evidence,
+    )
 
 
 VALIDATORS: dict[str, Validator] = {
@@ -1812,16 +2513,19 @@ VALIDATORS: dict[str, Validator] = {
     "FC-RT-006": check_rt006,
     "FC-RT-007": check_rt007,
     "FC-RT-008": check_rt008,
+    "FC-RT-009": check_rt009,
     "FC-RT-011": check_rt011,
     "FC-RT-012": check_rt012,
     "FC-RT-013": check_rt013,
     "FC-RT-014": check_rt014,
+    "FC-RT-015": check_rt015,
     "FC-RT-020": check_rt020,
     "FC-RT-022": check_rt022,
     "FC-RT-023": check_rt023,
     "FC-RT-030": check_rt030,
     "FC-RT-040": check_rt040,
     "FC-RT-041": check_rt041,
+    "FC-RT-044": check_rt044,
     "FC-RT-050": check_rt050,
     "FC-RT-060": check_rt060,
 }
@@ -1836,17 +2540,25 @@ def evaluate(
     app_run: AppRun | None,
     config: CheckConfig,
 ) -> list[CheckResult]:
-    """Every check of ``scenario`` (its own, then the every-scenario checks), in order."""
+    """Every check of ``scenario`` (its own, then the every-scenario checks of the run's
+    provider), in order."""
     ordered = by_seq(exchanges)
-    return [VALIDATORS[cid](ordered, app_run, scenario, config) for cid in scenario.all_check_ids]
+    return [
+        VALIDATORS[cid](ordered, app_run, scenario, config)
+        for cid in scenario.check_ids_for(config.provider)
+    ]
 
 
-def skip_all(scenario: Scenario, reason: str) -> list[CheckResult]:
-    return [skipped(cid, scenario, reason) for cid in scenario.all_check_ids]
+def skip_all(
+    scenario: Scenario, reason: str, provider: RuntimeProvider = "bharatcode"
+) -> list[CheckResult]:
+    return [skipped(cid, scenario, reason) for cid in scenario.check_ids_for(provider)]
 
 
-def error_all(scenario: Scenario, message: str) -> list[CheckResult]:
-    return [errored(cid, scenario, message) for cid in scenario.all_check_ids]
+def error_all(
+    scenario: Scenario, message: str, provider: RuntimeProvider = "bharatcode"
+) -> list[CheckResult]:
+    return [errored(cid, scenario, message) for cid in scenario.check_ids_for(provider)]
 
 
 _OBSERVED = (CheckStatus.PASSED, CheckStatus.FAILED, CheckStatus.NEEDS_REVIEW)
@@ -1855,7 +2567,8 @@ _OBSERVED = (CheckStatus.PASSED, CheckStatus.FAILED, CheckStatus.NEEDS_REVIEW)
 def report_once(
     runs: Sequence[tuple[Sequence[RecordedExchange], Sequence[CheckResult]]],
 ) -> list[list[CheckResult]]:
-    """Report the every-scenario checks (FC-RT-001…007, 050, 060) once per run (ADR-029).
+    """Report the every-scenario checks (FC-RT-001…007, 050, 060; on Groq runs FC-RT-002,
+    006, 007, 009, 015, 050, 060) once per run (ADR-029, ADR-038).
 
     Scenario-specific checks pass through unchanged. ``runs`` holds ``(exchanges, checks)`` per
     scenario, in run order. A failed or needs_review result that names offending requests is
@@ -1877,7 +2590,7 @@ def report_once(
         kept: list[CheckResult] = []
         for check in checks:
             cid = check.check_id
-            if cid not in EVERY_SCENARIO_CHECK_IDS:
+            if cid not in REPORTED_ONCE_CHECK_IDS:
                 kept.append(check)
                 continue
             offenders: set[str] = set()
@@ -1909,14 +2622,15 @@ def report_once(
     return out
 
 
-def to_finding(check: CheckResult) -> Finding:
-    """Mirror a failed check as ``Finding(kind="runtime")`` (plan §21.2) for CI gating."""
-    meta = CHECKS[check.check_id]
+def to_finding(check: CheckResult, provider: RuntimeProvider = "bharatcode") -> Finding:
+    """Mirror a failed check as ``Finding(kind="runtime")`` (plan §21.2) for CI gating, with
+    the run provider's title, remediation and documentation link (:func:`meta_for`)."""
+    title, remediation, doc_url = meta_for(check.check_id, provider)
     medium = check.check_id == "FC-RT-014" and "[UNVERIFIED]" in check.message
     return Finding(
         id=Finding.make_id(check.check_id, check_ref=check.id),
         rule_id=check.check_id,
-        title=meta.title,
+        title=title,
         kind=FindingKind.RUNTIME,
         verification=Verification.RUNTIME_MOCK,
         severity=check.severity,
@@ -1924,9 +2638,9 @@ def to_finding(check: CheckResult) -> Finding:
         message=f"[{check.scenario_id}] {check.message}",
         location=None,
         evidence=list(check.evidence),
-        remediation=meta.remediation,
-        doc_url=DOC_URL,
-        provider="bharatcode",
+        remediation=remediation,
+        doc_url=doc_url,
+        provider=provider,
         check_ref=check.id,
     )
 
@@ -1947,6 +2661,7 @@ __all__ = [
     "expectation_met",
     "gaps_ms",
     "issued_call_ids",
+    "meta_for",
     "model_exchanges",
     "report_once",
     "sdk_retry_count",

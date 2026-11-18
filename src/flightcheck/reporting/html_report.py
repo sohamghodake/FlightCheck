@@ -76,6 +76,13 @@ MOCK_FIDELITY_NOTICES = {
     ),
     "n/a": "No runtime scenarios were run for this report (static analysis only).",
 }
+# A Groq run of `flightcheck test` (ADR-038, metadata.options.mock_provider == "groq").
+GROQ_DOCUMENTATION_NOTICE = (
+    "Runtime results were observed with FlightCheck's local mock, which models Groq's public "
+    "documentation (read 18 Nov 2026); details Groq does not document are marked [UNVERIFIED]. "
+    "They were not compared with the live API, so a passed check means “behaved correctly "
+    "against the documented contract”, not “works against Groq”."
+)
 # Plan §16.2 / docs/RULES.md "Explicit limitations", as plain text.
 LIMITATIONS = (
     "One-hop name resolution only: a call's client is found from an inline constructor, a name "
@@ -426,8 +433,16 @@ def build_view(report: Report) -> dict[str, Any]:
         ],
         "ai": _ai_view(data),
         "limitations": list(LIMITATIONS),
-        "mock_fidelity_notice": MOCK_FIDELITY_NOTICES.get(meta["mock_fidelity"], ""),
+        "mock_fidelity_notice": _fidelity_notice(meta),
     }
+
+
+def _fidelity_notice(meta: dict[str, Any]) -> str:
+    options = meta.get("options") or {}
+    groq = isinstance(options, dict) and options.get("mock_provider") == "groq"
+    if groq and meta["mock_fidelity"] == "documentation_model":
+        return GROQ_DOCUMENTATION_NOTICE
+    return MOCK_FIDELITY_NOTICES.get(meta["mock_fidelity"], "")
 
 
 @lru_cache(maxsize=1)

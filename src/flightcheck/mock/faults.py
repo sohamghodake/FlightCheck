@@ -13,19 +13,27 @@ class MockAction(StrEnum):
     OK_TEXT = "ok_text"  # complete text answer
     TOOL_CALL = "tool_call"  # function call for the first function tool in the request
     TRUNCATE = "truncate"  # chat finish_reason "length" / responses status "incomplete"
-    TRUNCATE_TOOL_CALL = "truncate_tool_call"  # partial function call in a truncated response
-    HTTP_ERROR = "http_error"  # status + OpenAI-style error body
-    STREAM_FAIL_AFTER = "stream_fail_after"  # N deltas then response.failed (non-stream: 500)
-    KEEPALIVE_STREAM = "keepalive_stream"  # SSE ":" comments between deltas (non-stream: text)
+    # Partial function call in a truncated response. On Groq routes [UNVERIFIED]: Groq may
+    # instead answer 400 with failed_generation (contract T6).
+    TRUNCATE_TOOL_CALL = "truncate_tool_call"
+    HTTP_ERROR = "http_error"  # status + error body (OpenAI-style; Groq routes: E1 shape)
+    # N deltas then response.failed (Groq Chat: an x_groq.error chunk, ST3); non-stream: 500.
+    STREAM_FAIL_AFTER = "stream_fail_after"
+    # SSE ":" comments between deltas (non-stream: text). Generic: no Groq basis (ST4).
+    KEEPALIVE_STREAM = "keepalive_stream"
     DELAY = "delay"  # sleep N s, then OK_TEXT (timeout testing)
+    # Groq routes only (P1): 400 with error.failed_generation (contract T6).
+    TOOL_VALIDATION_ERROR = "tool_validation_error"
 
 
 class MockStep(BaseModel):
     """One scripted answer.
 
     Common ``params``: ``scenario`` (ID used in markers and call IDs, default ``"mock"``),
-    ``text`` (answer text). ``HTTP_ERROR``: ``status`` (default 503), ``message``, ``code``,
-    ``retry_after``. ``DELAY``: ``seconds`` (default 1.0). ``STREAM_FAIL_AFTER``: ``n``
+    ``text`` (answer text). ``HTTP_ERROR``: ``status`` (default 503), ``message``, ``code``
+    (BharatCode routes only), ``retry_after``, ``headers`` (``retry-after`` and
+    ``x-ratelimit-*`` only; on Groq routes ``retry-after`` only with 429, contract E5).
+    ``DELAY``: ``seconds`` (default 1.0). ``STREAM_FAIL_AFTER``: ``n``
     (default 2). Any action answering a stream request: ``interval_s`` (seconds between SSE
     chunks, default 0, at most 60 per gap and 600 in total).
     """

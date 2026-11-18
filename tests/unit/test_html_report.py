@@ -455,6 +455,12 @@ def test_limitations_and_mock_fidelity_notice():
     assert "models BharatCode&#39;s public documentation" in _section(html, "scenarios")
     static_only = _section(render_html(_report()), "limitations")
     assert "No runtime scenarios were run for this report" in static_only
+    # A Groq run (ADR-038) names Groq, not BharatCode.
+    groq = _full_report()
+    groq.metadata.options["mock_provider"] = "groq"
+    groq_html = render_html(groq)
+    assert "models Groq&#39;s public documentation" in _section(groq_html, "limitations")
+    assert "BharatCode&#39;s public documentation" not in groq_html
 
 
 # --- escaping, redaction, self-containment --------------------------------------------------

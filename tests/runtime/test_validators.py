@@ -103,7 +103,13 @@ def body(**fields: Any) -> dict[str, Any]:
 
 
 def test_every_scenario_check_has_a_validator_and_metadata() -> None:
-    ids = {cid for s in SCENARIOS.values() for cid in s.all_check_ids}
+    # Over both run providers (ADR-038): FC-RT-009/015 run only on Groq runs.
+    ids = {
+        cid
+        for s in SCENARIOS.values()
+        for provider in ("bharatcode", "groq")
+        for cid in s.check_ids_for(provider)
+    }
     assert ids == set(v.VALIDATORS) == set(v.CHECKS)
 
 
@@ -135,7 +141,11 @@ def test_severities_follow_plan_17_4(check_id: str, severity: Severity) -> None:
 
 @pytest.mark.parametrize("check_id", sorted(set(v.VALIDATORS) - {"FC-RT-008"}))
 def test_zero_traffic_skips_every_traffic_check(check_id: str) -> None:
-    scenario = next(s for s in SCENARIOS.values() if check_id in s.all_check_ids)
+    scenario = next(
+        s
+        for s in SCENARIOS.values()
+        if check_id in s.check_ids_for("bharatcode") + s.check_ids_for("groq")
+    )
     result = run(check_id, [], scenario)
     assert result.status is SKIPPED
     assert result.reason == v.NO_TRAFFIC_REASON

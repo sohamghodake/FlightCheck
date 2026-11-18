@@ -1,8 +1,14 @@
 """Scenario catalogue (plan §18.3): fault script + the checks each scenario feeds.
 
-The P0 set is S01–S06 (S01, S02, S04 in Phase 7A; S03, S05, S06 in Phase 7B). S02b and S07–S10
-are P1: those IDs are known (so a typo is a ``ConfigError`` but a later scenario is not), and the
-orchestrator reports them with a ``Diagnostic`` instead of a fake result (ADR-029).
+The P0 set is S01–S06 (S01, S02, S04 in Phase 7A; S03, S05, S06 in Phase 7B) plus S11 (Groq
+only, phase G4). S02b and S07–S10 are P1: those IDs are known (so a typo is a ``ConfigError`` but
+a later scenario is not), and the orchestrator reports them with a ``Diagnostic`` instead of a
+fake result (ADR-029). A scenario selected on a run whose provider it does not apply to (S11 on
+a BharatCode run) gets a ``Diagnostic`` too (ADR-038).
+
+Every-scenario checks depend on the run provider (ADR-038 gating table): BharatCode runs keep
+FC-RT-001…007; Groq runs use FC-RT-002, 006, 007, 009 (store is not true) and 015 (only tools
+the model supports). FC-RT-050/060 run on both.
 
 Every ``script_factory`` returns a **new** :class:`FaultScript`: a script keeps a cursor, and a
 scenario must never see steps another run already consumed.
@@ -11,9 +17,10 @@ scenario must never see steps another run already consumed.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
+from flightcheck.core.config import RuntimeProvider
 from flightcheck.mock.faults import FaultScript, MockAction, MockStep
 
 # Checks evaluated in every scenario (§17.4 "Applies in: all") and reported once per run
@@ -28,6 +35,30 @@ CONTRACT_CHECK_IDS: tuple[str, ...] = (
     "FC-RT-007",
 )
 EVERY_SCENARIO_CHECK_IDS: tuple[str, ...] = (*CONTRACT_CHECK_IDS, "FC-RT-050", "FC-RT-060")
+# Groq runs (ADR-038): FC-RT-001 → 009 and FC-RT-003 → 015 (new meanings, new IDs, ADR-012);
+# FC-RT-004/005 have no Groq basis (contract R8, R13) and are not evaluated.
+GROQ_CONTRACT_CHECK_IDS: tuple[str, ...] = (
+    "FC-RT-002",
+    "FC-RT-006",
+    "FC-RT-007",
+    "FC-RT-009",
+    "FC-RT-015",
+)
+GROQ_EVERY_SCENARIO_CHECK_IDS: tuple[str, ...] = (
+    *GROQ_CONTRACT_CHECK_IDS,
+    "FC-RT-050",
+    "FC-RT-060",
+)
+# Every ID that is reported once per run, whichever the provider (validators.report_once).
+REPORTED_ONCE_CHECK_IDS: frozenset[str] = frozenset(
+    EVERY_SCENARIO_CHECK_IDS + GROQ_EVERY_SCENARIO_CHECK_IDS
+)
+BOTH_PROVIDERS: frozenset[str] = frozenset({"bharatcode", "groq"})
+
+
+def every_scenario_check_ids(provider: RuntimeProvider) -> tuple[str, ...]:
+    return GROQ_EVERY_SCENARIO_CHECK_IDS if provider == "groq" else EVERY_SCENARIO_CHECK_IDS
+
 
 BUSY_STEP_PREFIX = "busy_"
 TOOL_STEP_ID = "tool_call"
@@ -36,6 +67,19 @@ TRUNCATED_TOOL_STEP_ID = "truncated_tool_call"  # S05: the cut-off function call
 STREAM_FAIL_STEP_ID = "stream_fail"  # S06: the failing stream / HTTP 500 (FC-RT-030)
 TRUNCATION_STEP_IDS: tuple[str, ...] = (TRUNCATE_STEP_ID, TRUNCATED_TOOL_STEP_ID)
 STREAM_FAIL_AFTER_N = 3  # §18.3: STREAM_FAIL_AFTER n=3
+RATE_LIMIT_STEP_ID = "rate_limited"  # S11: the 429 (FC-RT-044)
+RATE_LIMIT_RETRY_AFTER_S = 2  # contract §4.7: "429 with retry-after: 2"
+# S11's x-ratelimit-* headers (contract E6: requests per day, tokens per minute; reset values in
+# Groq's "2m59.56s" / "7.66s" style). The token budget is the one exhausted here.
+RATE_LIMIT_HEADERS: dict[str, str] = {
+    "retry-after": str(RATE_LIMIT_RETRY_AFTER_S),
+    "x-ratelimit-limit-requests": "1000",
+    "x-ratelimit-remaining-requests": "998",
+    "x-ratelimit-reset-requests": "2m52.8s",
+    "x-ratelimit-limit-tokens": "8000",
+    "x-ratelimit-remaining-tokens": "0",
+    "x-ratelimit-reset-tokens": "2s",
+}
 
 
 @dataclass(frozen=True)
@@ -46,11 +90,17 @@ class Scenario:
     check_ids: tuple[str, ...]  # scenario-specific checks (plus EVERY_SCENARIO_CHECK_IDS)
     default_expectations: str
     priority: Literal["P0", "P1"]
+    providers: frozenset[str] = field(default=BOTH_PROVIDERS)  # runs it applies to (ADR-038)
 
     @property
     def all_check_ids(self) -> tuple[str, ...]:
-        """Scenario checks first, then the every-scenario checks (no duplicates)."""
-        extra = tuple(c for c in EVERY_SCENARIO_CHECK_IDS if c not in self.check_ids)
+        """Scenario checks first, then BharatCode's every-scenario checks (no duplicates)."""
+        return self.check_ids_for("bharatcode")
+
+    def check_ids_for(self, provider: RuntimeProvider) -> tuple[str, ...]:
+        """Scenario checks first, then the provider's every-scenario checks (no duplicates)."""
+        every = every_scenario_check_ids(provider)
+        extra = tuple(c for c in every if c not in self.check_ids)
         return (*self.check_ids, *extra)
 
 
@@ -121,6 +171,24 @@ def _s06_script() -> FaultScript:
     )
 
 
+def _s11_script() -> FaultScript:
+    # Contract §4.7 / E5, E6: a 429 with retry-after and the x-ratelimit-* headers, then OK.
+    return FaultScript(
+        steps=[
+            _step(
+                RATE_LIMIT_STEP_ID,
+                MockAction.HTTP_ERROR,
+                "S11",
+                status=429,
+                message="Rate limit reached: wait before retrying.",
+                headers=dict(RATE_LIMIT_HEADERS),
+            ),
+            _step("after_rate_limit", MockAction.OK_TEXT, "S11"),
+        ],
+        default_step=_default("S11"),
+    )
+
+
 S01 = Scenario(
     id="S01",
     name="Baseline",
@@ -170,7 +238,17 @@ S06 = Scenario(
     priority="P0",
 )
 
-SCENARIOS: dict[str, Scenario] = {s.id: s for s in (S01, S02, S03, S04, S05, S06)}
+S11 = Scenario(
+    id="S11",
+    name="Rate limited (429)",
+    script_factory=_s11_script,
+    check_ids=("FC-RT-044",),
+    default_expectations=f"next request ≥ {RATE_LIMIT_RETRY_AFTER_S} s after the 429",
+    priority="P0",
+    providers=frozenset({"groq"}),
+)
+
+SCENARIOS: dict[str, Scenario] = {s.id: s for s in (S01, S02, S03, S04, S05, S06, S11)}
 
 # Known but not implemented (P1): ID -> name.
 P1_SCENARIOS: dict[str, str] = {
@@ -192,12 +270,19 @@ KNOWN_SCENARIO_IDS: tuple[str, ...] = (
     "S08",
     "S09",
     "S10",
+    "S11",
 )
 
 
 __all__ = [
     "CONTRACT_CHECK_IDS",
     "EVERY_SCENARIO_CHECK_IDS",
+    "GROQ_CONTRACT_CHECK_IDS",
+    "GROQ_EVERY_SCENARIO_CHECK_IDS",
+    "RATE_LIMIT_HEADERS",
+    "RATE_LIMIT_RETRY_AFTER_S",
+    "RATE_LIMIT_STEP_ID",
+    "REPORTED_ONCE_CHECK_IDS",
     "KNOWN_SCENARIO_IDS",
     "P1_SCENARIOS",
     "S01",
@@ -206,10 +291,12 @@ __all__ = [
     "S04",
     "S05",
     "S06",
+    "S11",
     "SCENARIOS",
     "STREAM_FAIL_STEP_ID",
     "TRUNCATED_TOOL_STEP_ID",
     "TRUNCATE_STEP_ID",
     "TRUNCATION_STEP_IDS",
     "Scenario",
+    "every_scenario_check_ids",
 ]
