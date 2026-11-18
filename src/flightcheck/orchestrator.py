@@ -63,7 +63,7 @@ from flightcheck.runtime.validators import (
 )
 from flightcheck.scanner.detect import detect
 from flightcheck.scanner.discovery import DiscoveryOptions
-from flightcheck.scanner.engine import BharatCodeMode, RuleContext, run_rules
+from flightcheck.scanner.engine import BharatCodeMode, GroqMode, RuleContext, run_rules
 from flightcheck.scanner.parser import RepoIndex, build_index
 
 PROVIDER_OVERRIDES = ("bharatcode", "groq", "openai_compatible")
@@ -71,12 +71,13 @@ PROVIDER_OVERRIDES = ("bharatcode", "groq", "openai_compatible")
 
 def _provider_mode(
     request: ScanRequest, config: FlightCheckConfig
-) -> tuple[BharatCodeMode, str | None]:
-    """BharatCode rule mode and the ``declared_provider`` passed to detection.
+) -> tuple[BharatCodeMode, GroqMode, str | None]:
+    """BharatCode rule mode, Groq rule mode and the ``declared_provider`` for detection.
 
-    A ``groq`` profile declares ``groq`` to detection. ``--provider groq`` also disables the
-    BharatCode rules everywhere; ``[project] provider = "groq"`` leaves them in ``auto`` mode,
-    where they run only on call sites still classified ``bharatcode`` (ADR-036).
+    ``--provider X`` forces X's rule family on every call site and disables the other family;
+    ``--provider openai_compatible`` disables both. ``[project] provider`` (a profile's kind)
+    only declares the provider to detection and keeps both families in ``auto`` mode, except
+    ``openai_compatible``, which disables both (ADR-025, ADR-036, ADR-037).
     """
     if request.provider_override is not None and request.provider_override not in (
         PROVIDER_OVERRIDES
@@ -87,16 +88,17 @@ def _provider_mode(
         )
     name = request.provider_override or config.provider
     if name is None:
-        return "auto", None
+        return "auto", "auto", None
     profile = config.providers.get(name)
     kind = profile.kind if profile is not None else name
+    forced = request.provider_override is not None
     if kind == "bharatcode":
-        return ("forced" if request.provider_override else "auto"), "bharatcode"
+        return ("forced", "disabled", "bharatcode") if forced else ("auto", "auto", "bharatcode")
     if kind == "groq":
-        return ("disabled" if request.provider_override else "auto"), "groq"
+        return ("disabled", "forced", "groq") if forced else ("auto", "auto", "groq")
     if kind == "openai_compatible":
-        return "disabled", None
-    return "auto", None
+        return "disabled", "disabled", None
+    return "auto", "auto", None
 
 
 def run_scan(request: ScanRequest, config: FlightCheckConfig) -> Report:
@@ -104,10 +106,10 @@ def run_scan(request: ScanRequest, config: FlightCheckConfig) -> Report:
     root = Path(request.root)
     if not root.exists():
         raise ConfigError(f"Path not found: {root} — pass a directory containing your app")
-    mode, declared = _provider_mode(request, config)
+    mode, groq_mode, declared = _provider_mode(request, config)
     index = build_index(root, DiscoveryOptions.from_config(config.scan))
     detection = detect(index, declared_provider=declared)
-    ctx = RuleContext(index=index, detection=detection, bharatcode_mode=mode)
+    ctx = RuleContext(index=index, detection=detection, bharatcode_mode=mode, groq_mode=groq_mode)
     findings = run_rules(index, ctx, rule_ids=request.rule_ids, min_severity=request.min_severity)
     resolved = root.resolve()
     metadata = ReportMetadata(
@@ -384,12 +386,14 @@ def run_test(
     notes = list(plan.notes)
     index = plan.index
 
-    mode, declared = _provider_mode(ScanRequest(root=root), config)
+    mode, groq_mode, declared = _provider_mode(ScanRequest(root=root), config)
     detection = detect(index, declared_provider=declared)
     static_findings = []
     scan_diagnostics: list[Diagnostic] = []
     if request.include_scan:
-        ctx = RuleContext(index=index, detection=detection, bharatcode_mode=mode)
+        ctx = RuleContext(
+            index=index, detection=detection, bharatcode_mode=mode, groq_mode=groq_mode
+        )
         static_findings = run_rules(index, ctx)
         scan_diagnostics = ctx.diagnostics
 

@@ -80,12 +80,29 @@ def test_builtin_registry_has_bc_rules_with_doc_source() -> None:
 
 def test_builtin_gen_and_sec_rules_run_on_every_provider() -> None:
     registry = load_builtin_rules()
-    others = {rule_id: meta for rule_id, (meta, _) in registry.items() if rule_id[:6] != "FC-BC-"}
+    others = {
+        rule_id: meta
+        for rule_id, (meta, _) in registry.items()
+        if rule_id[:6] not in ("FC-BC-", "FC-GQ-")
+    }
     assert others
     for rule_id, meta in others.items():
         assert meta.id == rule_id and meta.remediation
         assert meta.providers == frozenset({"*"})
         assert meta.category == ("security" if rule_id.startswith("FC-SEC-") else "robustness")
+
+
+def test_builtin_groq_rules_are_groq_only_with_doc_source() -> None:
+    registry = load_builtin_rules()
+    groq = {rule_id: meta for rule_id, (meta, _) in registry.items() if rule_id[:6] == "FC-GQ-"}
+    assert groq
+    for rule_id, meta in groq.items():
+        assert meta.id == rule_id and meta.remediation
+        assert meta.providers == frozenset({"groq"})
+        assert meta.category == "groq-contract"
+        assert meta.doc_source and meta.doc_source.startswith(
+            ("https://console.groq.com/docs/", "https://github.com/groq/groq-python")
+        )
 
 
 def test_unknown_rule_id_lists_valid_ids() -> None:

@@ -5,20 +5,35 @@ rules that rest on a documented BharatCode fact) cites
 <https://bharatcode.ai/build> (read 6 Nov 2026; see [BHARATCODE_CONTRACT.md](BHARATCODE_CONTRACT.md)
 §15.1). Items marked **[UNVERIFIED]** stay so until the Phase 10 live probe.
 
+Every Groq rule (`FC-GQ-*`, phase G3, ADR-037) cites a row of
+[GROQ_CONTRACT.md](GROQ_CONTRACT.md) (Groq's documentation and the `groq` SDK v1.7.0, read
+**18 Nov 2026**). Items marked **[UNVERIFIED]** there stay so until phase G5 verifies them live;
+a Groq rule claims an HTTP status only where the contract states it (rows C2, C4, M4, S8, T3).
+
 Each rule has `bad_*.py` and `good_*.py` fixtures under `tests/fixtures/rules/<rule_id>/` and exact
 expectations in `tests/fixtures/expected_findings.json`.
 
 ## How rules apply
 
-- BharatCode rules run on call sites classified `bharatcode` (any confidence), or on every call
-  site with `--provider bharatcode`. `--provider openai_compatible` and `--provider groq` turn
-  them off.
-- Groq call sites (phase G2, ADR-036): call sites classified `groq` get only the
-  provider-neutral FC-GEN and FC-SEC rules until the Groq contract rules (`FC-GQ-*`) arrive in
-  G3. `[project] provider = "groq"` classifies call sites as Groq without disabling the
-  BharatCode rules on call sites that still resolve to BharatCode.
+- Each provider rule family has a mode (ADR-025, ADR-036, ADR-037): **auto** runs it on call
+  sites classified as its provider at any confidence (FC-GQ-015: on client constructors
+  classified `groq`); **forced** runs it on every call site and skips the confidence
+  downgrade; **disabled** never runs it. Detection decides, never a rule: a Groq model ID alone
+  (GPT-OSS IDs are served elsewhere too) does not make a call site Groq.
+
+  | Setting                                        | BharatCode rules (`FC-BC-*`) | Groq rules (`FC-GQ-*`) | Declared to detection |
+  | ---------------------------------------------- | ---------------------------- | ---------------------- | --------------------- |
+  | none (`--provider auto`)                       | auto                         | auto                   | —                     |
+  | `--provider bharatcode`                        | forced                       | disabled               | `bharatcode`          |
+  | `--provider groq`                              | disabled                     | forced                 | `groq`                |
+  | `--provider openai_compatible`                 | disabled                     | disabled               | —                     |
+  | `[project] provider = "bharatcode"`            | auto                         | auto                   | `bharatcode`          |
+  | `[project] provider = "groq"`                  | auto                         | auto                   | `groq`                |
+  | `[project] provider` of kind `openai_compatible` | disabled                   | disabled               | —                     |
+
+  `--provider` wins over `[project] provider`; a custom profile counts by its `kind`.
 - When a call site's provider confidence is `low` (receiver not resolved; repo-level provider
-  used), the finding's confidence is lowered one level. `--provider bharatcode` skips this.
+  used), a provider rule's finding confidence is lowered one level, except in forced mode.
 - Only literal values are inspected. A non-literal value (`store=flag`) never produces a contract
   violation.
 - Call kinds: Responses = `responses.create|stream|parse` and raw `POST …/responses`;
@@ -47,11 +62,55 @@ expectations in `tests/fixtures/expected_findings.json`.
 
 Reserved: **FC-BC-009** (request ID never captured, P1) is not implemented yet.
 
+## Groq contract rules (`scanner/rules/groq.py`)
+
+Phase G3, ADR-037. Category `groq-contract`; every row cites docs/GROQ_CONTRACT.md, read
+**18 Nov 2026**. Model facts (limits, JSON-schema support, reasoning values, tiers) come from
+`core.config.GROQ_MODELS`, a catalogue dated 18 Nov 2026; messages of FC-GQ-005/006/011/014 carry
+that date. Only literal values are inspected (`tools` also one hop, as FC-BC-003). A parameter
+Groq documents as unsupported (FC-GQ-002, 004, 010) is still flagged when its value is a
+variable, one confidence level lower (the FC-BC-002 precedent).
+
+| ID        | Title | Detection | Severity / confidence | Fix | Contract row |
+| --------- | ----- | --------- | --------------------- | --- | ------------ |
+| FC-GQ-001 | `store=True` on `/responses` | Responses call with literal `store` `True`. Groq documents `store` as not supported yet, accepting only `false`/`null`; the effect of `true` is **[UNVERIFIED]** (no status claimed). | high / high | Remove it (Groq's default is `false`); replay history in `input`. | R4, R5 |
+| FC-GQ-002 | `previous_response_id` used | Responses call passing `previous_response_id` with any value except literal `None`. Not stateful; the response field is always null. | high / high (literal), high / medium (variable) | Remove it; send prior turns and `output` items in `input`. | R4, R6 |
+| FC-GQ-003 | Unsupported hosted or built-in tool | `tools` (literal or one hop), both endpoints: a `type` other than `function`, `mcp`, `browser_search`, `code_interpreter`; or a built-in tool (`browser_search`, `code_interpreter`) with a literal model other than `openai/gpt-oss-20b`/`-120b`. | high / high (literal), high / medium (one hop) | Use your own function tools, or a GPT-OSS model for built-in tools. | R9, T8 |
+| FC-GQ-004 | Unsupported Responses parameter | Responses call with `include`, `safety_identifier`, `prompt_cache_key` or `prompt` (not `None`). Not `truncation` (R7 conflict). Rejected or ignored is **[UNVERIFIED]**. | medium / high (literal), medium / medium (variable) | Remove them. | R4 (P1) |
+| FC-GQ-005 | Output budget above the model's maximum | Literal model in the catalogue and literal `max_completion_tokens`/`max_tokens` (Chat) or `max_output_tokens` (Responses) above its max completion tokens (e.g. 65 536 GPT-OSS, 32 768 Llama 3.3 70B, 16 384 Qwen 3.8). | medium / high | Stay within the model's maximum (Responses: includes reasoning). | §1.8 |
+| FC-GQ-006 | Model not in Groq's catalogue, decommissioned or preview | Literal `model`: decommissioned ID (`GROQ_DECOMMISSIONED_MODELS`) → high/high ("requests return errors"); not in the catalogue → medium/medium; `llama-3.3-70b-versatile`/`llama-3.1-8b-instant` (Enterprise-only, shut down for free/developer tiers 16 Aug 2026) → low/high; preview model → info/high. | see detection | A production model from Groq's models page or `GET /models`. | §1.8, M1, M2 |
+| FC-GQ-007 | Chat parameter rejected by Groq | Chat call with `logprobs`, `logit_bias` or `top_logprobs` given a literal other than `None`/`False` (whether `False` counts is **[UNVERIFIED]**). Documented 400. | high / high | Remove them. | C2 |
+| FC-GQ-008 | `n` other than 1 | Chat call with a literal integer `n` ≠ 1. Documented 400. | high / high | Drop `n`; make separate requests. | C4 |
+| FC-GQ-009 | Parameter with no effect on Groq | Chat call with a non-zero literal `frequency_penalty`/`presence_penalty`, or literal `metadata`. Ignored or rejected is **[UNVERIFIED]**. | low / medium | Remove them. | C5 (P1) |
+| FC-GQ-010 | Deprecated Chat parameter | Chat call with `max_tokens` (use `max_completion_tokens`), `functions` (use `tools`) or `function_call` (use `tool_choice`), not `None`. | low / high (literal), low / medium (variable) | Use the replacements. | C6, C9 (P1) |
+| FC-GQ-011 | Structured output on an unsupported model or mode | Literal `json_schema` format (Chat `response_format`, Responses `text.format`) with a catalogue model that lists no JSON-schema support, or `strict: True` with a best-effort-only model; or `json_schema` together with `stream=True` or a non-empty literal/one-hop `tools`. Effects **[UNVERIFIED]**. | medium / high | Use a model from S3, JSON object mode, no stream/tools. | S3, S5, T9 |
+| FC-GQ-012 | Strict schema not strict-compatible | Literal `strict: True` schema in which an object (nested, `items`, `$defs`, `anyOf`…) lacks `additionalProperties: false` or leaves a property out of `required`. | medium / medium | Require every property; `additionalProperties: false`. | S2 (P1) |
+| FC-GQ-013 | JSON object mode without JSON instructions | Chat call with literal `response_format={"type": "json_object"}` and a literal `messages` list in which no string mentions "json". Heuristic (ADR-013): "not observed" wording. | low / medium | Ask for JSON in the prompt. | S6 (P1) |
+| FC-GQ-014 | Invalid reasoning parameters | Literal reasoning effort (Chat `reasoning_effort`, Responses `reasoning.effort`) outside the catalogue model's documented values → high/high (400); Chat `reasoning_format` on GPT-OSS, or with a literal `include_reasoning` → medium/high (status **[UNVERIFIED]**); `reasoning_format="raw"` with `json_object` mode or non-empty tools → high/high (400). | see detection | Documented efforts only; no `reasoning_format` on GPT-OSS; `parsed`/`hidden` with JSON mode or tools. | M4, M5, S8 |
+| FC-GQ-015 | Wrong base URL for the client library | Client constructor: `groq.Groq`/`AsyncGroq` whose `base_url` (literal or fragments) ends in `/openai/v1` (the SDK adds it again); `openai.OpenAI`/`AsyncOpenAI` whose `base_url` names `api.groq.com` without `/openai/v1`; an `httpx`/`httpx2` client on `api.groq.com` without `/openai/v1` that posts to a path without it. | high / high | groq SDK: omit `base_url`; OpenAI SDK/raw HTTP: `https://api.groq.com/openai/v1`. | A1, K4 |
+| FC-GQ-017 | `responses` called on the groq SDK | `responses.create|stream|parse` whose resolved client is `groq.Groq`/`AsyncGroq` (v1.7.0 has no `responses` resource; SDK-version dependent). | high / medium | Use the OpenAI SDK with Groq's base URL, or `chat.completions`. | R14, K8 |
+| FC-GQ-018 | Too many stop sequences or tools | Chat literal `stop` list longer than 4; literal (or one-hop) `tools` list longer than 128. | medium / high (one-hop tools: medium) | At most 4 stops, 128 tools. | C7, T1 (P1) |
+| FC-GQ-019 | `stream_options` without streaming | Chat call with `stream_options` (not `None`) and `stream` literal `False` or absent. A variable `stream` is not flagged (it may be `True`). | low / high | Set `stream_options` only with `stream=True`. | C10 (P1) |
+
+Reserved, not implemented: **FC-GQ-016** (`name` on a message: contract C2 says 400, C3
+contradicts it; held as a hypothesis candidate until G5 verifies it live) and **FC-GQ-020**
+(`parallel_tool_calls=True` on a GPT-OSS model, P1).
+
 ## Robustness rules (`scanner/rules/robustness.py`)
 
 Heuristic rules (001, 002, 003, 006) are lexical: they look at the attributes and strings of the
 function that makes the call, or for module-level calls at the module's top-level code. They are
 at most `medium` confidence and say "not observed in `<function>`" (ADR-013).
+
+On call sites classified `groq` (FC-GEN-006/007: files whose classified call sites are all
+`groq`), the message, remediation and documentation link cite Groq (ADR-037, contract §4.3):
+001 `length` is a documented finish_reason (C11), budget within the model's maximum; 002
+`incomplete`/`incomplete_details` (R10); 003 a chunk's `x_groq.error` ends a Chat stream (ST3;
+checking only `x_groq.error` is not enough, `finish_reason` is still required), Responses
+stream events undocumented (R15); 004 retry 429 after `retry-after` and 500/502/503 with
+back-off, log `x_groq.id` (E2, E3, E5, E9, E10); 006 Groq's 400 `failed_generation` (T4, T6);
+007 the tool message `content` is a string (T5; Responses: OpenAI convention, T10). Other call
+sites keep their wording.
 
 | ID         | Title                                          | Detection                                                                                                                                                                                                                         | Severity / confidence                    | Fix                                                                                                            |
 | ---------- | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
@@ -59,7 +118,7 @@ at most `medium` confidence and say "not observed in `<function>`" (ADR-013).
 | FC-GEN-002 | Responses truncation not checked               | Non-streaming `responses.create` whose function reads `.output_text`/`.output` but never references `status` or `incomplete_details`.                                                                                             | medium / medium                          | Check `status == "incomplete"` (`incomplete_details.reason`).                                                  |
 | FC-GEN-003 | Stream terminal events not handled             | A `for` loop over a `stream=True` call (inline, one-hop name, or `with … as stream`). Responses: the function reads `.delta`/`"response.output_text.delta"` but none of `response.completed`/`incomplete`/`failed`. Chat: the loop body never references `finish_reason`. | medium / medium                          | Handle completed, incomplete (keep partial output) and failed; treat EOF without a terminal event as failure. |
 | FC-GEN-004 | No error handling around the API call          | Call site not lexically inside a `try` body in its function (`except`, `else` and `finally` blocks do not protect).                                                                                                               | medium / medium; low if the function is decorated (possible retry decorator) | Catch provider errors; bounded retry with back-off on 503; no retry on other 4xx; surface `request_id`. |
-| FC-GEN-005 | Client constructed without an explicit timeout | `openai.OpenAI`/`AsyncOpenAI`, `httpx(2).Client`/`AsyncClient` without `timeout=`, and no `.with_options(timeout=…)` in the file. SDK default is 10 minutes **[VERIFIED]**; BharatCode requests may queue **[VERIFIED]**.      | low / high                               | `OpenAI(..., timeout=httpx2.Timeout(300.0, connect=10.0))` (a recommendation).                                 |
+| FC-GEN-005 | Client constructed without an explicit timeout | `openai.OpenAI`/`AsyncOpenAI`, `groq.Groq`/`AsyncGroq`, `httpx(2).Client`/`AsyncClient` without `timeout=`, and no `.with_options(timeout=…)` in the file. The message states each library's own default: OpenAI SDK 10 minutes **[VERIFIED]** (BharatCode requests may queue **[VERIFIED]**); groq SDK 60 s total, 5 s connect (contract K5), so groq clients get only an info note (ADR-037). | low / high; info / high (groq SDK) | `OpenAI(..., timeout=httpx2.Timeout(300.0, connect=10.0))`; `Groq(..., timeout=httpx.Timeout(60.0, connect=10.0))` (recommendations). |
 | FC-GEN-006 | Tool arguments parsed without error handling   | `json.loads(<expr>.arguments)` (or of a name bound one hop to `<expr>.arguments`) not inside a `try` catching `JSONDecodeError`, `ValueError`, `Exception` or `BaseException`.                                                   | medium / medium                          | Parse inside `try`, validate against the schema, return an error string as the tool output.                   |
 | FC-GEN-007 | Tool result `output` is not a string           | Dict literal with `"type": "function_call_output"` whose `"output"` (Chat: `"role": "tool"` whose `"content"`) is a dict/list/tuple/set or non-string constant, or a bare name / call other than `json.dumps`, `str`, `repr`, `"…".format`, `"…".join`. | high / high (literal); high / low (name or call) | `"output": json.dumps(result)` with the matching `call_id`.                                       |
 
@@ -70,7 +129,7 @@ Reserved (P1, not implemented): **FC-GEN-008** (tool calls executed without chec
 
 | ID         | Title                                | Detection                                                                                                                                                                                                                                               | Severity / confidence                                       | Fix                                                                       |
 | ---------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------- |
-| FC-SEC-001 | Hard-coded API key                   | A string literal containing `bc_live_` + ≥ 8 key characters (BharatCode prefix **[OBSERVED]**) or `sk-` + ≥ 16; or a string literal given to `api_key=`, a dict key or a name whose words end in "api key". Placeholders (`""`, `EMPTY`, `dummy`, `test`, `your_key_here`, `bc_live_your_key_here`) are info. The literal is shown only as `bc_live_…[REDACTED]` / `[REDACTED]`. | critical / high (prefix); high / medium (keyed literal); info (placeholder) | Read `BHARATCODE_API_KEY` from the environment; rotate the exposed key. |
+| FC-SEC-001 | Hard-coded API key                   | A string literal containing `bc_live_` + ≥ 8 key characters (BharatCode prefix **[OBSERVED]**), `gsk_` + ≥ 8 (Groq prefix, from its placeholders, contract A4) or `sk-` + ≥ 16; or a string literal given to `api_key=`, a dict key or a name whose words end in "api key". Placeholders (`""`, `EMPTY`, `dummy`, `test`, `your_key_here`, `bc_live_your_key_here`, `gsk_your_secret_key_here`, `gsk_...`) are info. The literal is shown only as `bc_live_…[REDACTED]` / `gsk_…[REDACTED]` / `[REDACTED]`. | critical / high (prefix); high / medium (keyed literal); info (placeholder) | Read the key from the environment and rotate it: `GROQ_API_KEY` for Groq keys (prefix, a `GROQ` name or a `groq` client), `BHARATCODE_API_KEY` for BharatCode keys, the provider's variable otherwise. |
 | FC-SEC-002 | Credential written to logs or stdout | `print(…)`, `logging.<method>(…)` or `<log/logger>.<method>(…)` whose arguments reference a name/attribute whose words include api key, `secret`, `token` or `authorization`, or an environment read of such a variable (`print(f"{api_key[:4]}…")` is still flagged). | high / medium                                               | Never log credentials; log `request_id` instead.                          |
 
 Reserved (P1, not implemented): **FC-SEC-003** (`.env` present but not ignored). FC-SEC-004 (P2)
@@ -105,12 +164,15 @@ These are copied from plan §16.2 and ADR-011. A plain-text version is shown in 
   in a function defined inside a `try`, counts as unprotected (FC-GEN-004, FC-GEN-006). A function
   called only from inside a `try` is not analysed.
 - **FC-GEN-005** does not see `OpenAI(**kwargs)`; a timeout passed that way is a false positive.
-- **Redaction is pattern- and value-based** (`core/redact.py`, ADR-033). It replaces `bc_live_`
-  and `sk-` keys, `Bearer` tokens, `api_key=` / `token=` / `secret=` / `password=` assignments
+- **Redaction is pattern- and value-based** (`core/redact.py`, ADR-033). It replaces `bc_live_`,
+  `gsk_` and `sk-` keys, `Bearer` tokens, `api_key=` / `token=` / `secret=` / `password=` assignments
   (also when the quote is JSON-escaped), keys read from the environment, and exact values of
   secret-named environment variables of 8 or more characters. A secret **split across lines**
   or assembled from pieces at runtime (`"bc_live_" + tail`) is not recognised in source text;
   only its assembled value is, when it reaches an output. Short or unprefixed literals are
   masked only where a rule sees them assigned to a key-like name (ADR-026).
+- **Groq rules see literal requests only.** `chat.completions.parse(response_format=Model)` and
+  other SDK-built requests (Pydantic models, `extra_body`) are not inspected; a model name held in
+  a variable gets no model-dependent check. Model facts are a snapshot dated 18 Nov 2026.
 - **Static findings never claim runtime behaviour.** "Requests from this call site will …" is used
   only for documented contract rules with literal evidence; everything else uses "may".

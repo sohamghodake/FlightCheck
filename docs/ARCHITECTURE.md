@@ -7,7 +7,7 @@ this file is corrected in the same commit.
 **Current state (Phase 11):** `src/flightcheck/__init__.py`, `__main__.py`, `cli/app.py` (with
 `--version`), the `core` package (`models`, `config`, `errors`, `logging`, `redact`, `paths`,
 `capabilities`, `contract`) and the scanner (`scanner/discovery`, `ast_utils`, `parser`,
-`detect`, `engine`, `rules/{bharatcode,robustness,security}`), `orchestrator.run_scan`,
+`detect`, `engine`, `rules/{bharatcode,groq,robustness,security}`), `orchestrator.run_scan`,
 `reporting/{json_report,terminal}` and the `scan` command exist, plus the complete mock
 provider (`mock/{faults,payloads,recorder,app,server}`: JSON and SSE answers, `MockServer` on
 127.0.0.1; the payload fields the OpenAI SDK needs are listed in §8) and the provider layer
@@ -128,7 +128,7 @@ src/flightcheck/
   __init__.py  __main__.py  orchestrator.py
   cli/         app.py, render.py
   core/        models, config, errors, logging, redact, paths
-  scanner/     discovery, parser, ast_utils, detect, engine, rules/{bharatcode,robustness,security}
+  scanner/     discovery, parser, ast_utils, detect, engine, rules/{bharatcode,groq,robustness,security}
   providers/   base, capabilities, http (all httpx2 client creation), sse, bharatcode,
                openai_compat, registry
   mock/        faults, payloads, recorder, app, server

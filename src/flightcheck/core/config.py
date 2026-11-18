@@ -87,6 +87,8 @@ class GroqModelFacts:
     parallel_tool_calls: bool | None = None  # contract T7
     builtin_tools: bool = False  # browser_search / code_interpreter (R9, T8)
     reasoning_efforts: frozenset[str] | None = None  # accepted reasoning_effort values (M4)
+    # False: reasoning_format is documented as not supported (M5, §1.8; GPT-OSS). ADR-037.
+    reasoning_format: bool | None = None
 
 
 _GPT_OSS_EFFORTS = frozenset({"low", "medium", "high"})
@@ -101,6 +103,7 @@ GROQ_MODELS: dict[str, GroqModelFacts] = {
         parallel_tool_calls=False,
         builtin_tools=True,
         reasoning_efforts=_GPT_OSS_EFFORTS,
+        reasoning_format=False,
     ),
     "openai/gpt-oss-20b": GroqModelFacts(
         "production",
@@ -112,6 +115,7 @@ GROQ_MODELS: dict[str, GroqModelFacts] = {
         parallel_tool_calls=False,
         builtin_tools=True,
         reasoning_efforts=_GPT_OSS_EFFORTS,
+        reasoning_format=False,
     ),
     "llama-3.3-70b-versatile": GroqModelFacts(
         "production", "chat", 131_072, 32_768, enterprise_only=True, parallel_tool_calls=True

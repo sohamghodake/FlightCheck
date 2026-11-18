@@ -133,15 +133,27 @@ def string_fragments(node: ast.AST, resolve_name: NameResolver | None = None) ->
 _WORD = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+")
 _CREDENTIAL_WORDS = frozenset({"apikey", "secret", "token", "authorization"})
 
-# Prefixed key patterns (FC-SEC-001). ``bc_live_`` is the BharatCode prefix [OBSERVED].
+# Prefixed key patterns (FC-SEC-001). ``bc_live_`` is the BharatCode prefix [OBSERVED];
+# ``gsk_`` is Groq's, from its documented placeholders (contract A4, ADR-036 item 8, ADR-037).
 SECRET_PREFIX_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"(?<![A-Za-z0-9])bc_live_[A-Za-z0-9_\-]{8,}"), "bc_live_…[REDACTED]"),
+    (re.compile(r"(?<![A-Za-z0-9])gsk_[A-Za-z0-9_\-]{8,}"), "gsk_…[REDACTED]"),
     (re.compile(r"(?<![A-Za-z0-9])sk-[A-Za-z0-9_\-]{16,}"), "sk-…[REDACTED]"),
 )
-# Placeholder values (compared lower-cased) are reported as info. The prefixed one is split so
+# Placeholder values (compared lower-cased) are reported as info. The prefixed ones are split so
 # FlightCheck's own source holds no literal its FC-SEC-001 would match (dogfood gate, §26.2).
+# Groq's documented placeholders: ``gsk_your_secret_key_here`` and ``gsk_...`` (contract A4).
 PLACEHOLDER_KEYS = frozenset(
-    {"", "empty", "dummy", "test", "your_key_here", "bc_live_" + "your_key_here"}
+    {
+        "",
+        "empty",
+        "dummy",
+        "test",
+        "your_key_here",
+        "bc_live_" + "your_key_here",
+        "gsk_" + "your_secret_key_here",
+        "gsk_" + "...",
+    }
 )
 
 

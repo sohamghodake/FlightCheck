@@ -1,4 +1,7 @@
-"""Rule gating for Groq call sites before G3 (ADR-036): provider-neutral rules only."""
+"""Rule gating for Groq call sites (ADR-036; G3 mode table in ADR-037).
+
+The G3 rule-level cells (Groq rules on/off per mode) are in tests/scanner/test_groq_rule_gating.py.
+"""
 
 from __future__ import annotations
 
@@ -83,7 +86,7 @@ def test_project_provider_groq_declares_groq_and_keeps_auto_mode(tmp_path: Path)
         encoding="utf-8",
     )
     config = load_config(tmp_path, environ={})
-    assert _provider_mode(ScanRequest(root=tmp_path), config) == ("auto", "groq")
+    assert _provider_mode(ScanRequest(root=tmp_path), config) == ("auto", "auto", "groq")
     report = run_scan(ScanRequest(root=tmp_path), config)
     call = next(d for d in report.providers_detected if d.location.path == "app.py")
     assert (call.provider, call.confidence.value) == ("groq", "high")
@@ -94,10 +97,10 @@ def test_project_provider_groq_declares_groq_and_keeps_auto_mode(tmp_path: Path)
 @pytest.mark.parametrize(
     ("override", "expected"),
     [
-        ("groq", ("disabled", "groq")),
-        ("bharatcode", ("forced", "bharatcode")),
-        ("openai_compatible", ("disabled", None)),
-        (None, ("auto", None)),
+        ("groq", ("disabled", "forced", "groq")),
+        ("bharatcode", ("forced", "disabled", "bharatcode")),
+        ("openai_compatible", ("disabled", "disabled", None)),
+        (None, ("auto", "auto", None)),
     ],
 )
 def test_provider_mode_table(override: str | None, expected: tuple) -> None:

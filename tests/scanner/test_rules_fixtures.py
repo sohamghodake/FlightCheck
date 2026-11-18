@@ -68,7 +68,10 @@ def test_every_rule_has_bad_and_good_fixtures(rule_id: str) -> None:
 
 
 def test_bad_fixtures_say_they_are_intentionally_flawed() -> None:
-    for path in FIXTURE_ROOT.glob("FC-[GS]E[NC]-*/bad_*.py"):
+    for path in [
+        *FIXTURE_ROOT.glob("FC-[GS]E[NC]-*/bad_*.py"),
+        *FIXTURE_ROOT.glob("FC-GQ-*/bad_*.py"),
+    ]:
         assert "INTENTIONALLY FLAWED FIXTURE" in path.read_text(encoding="utf-8"), path
 
 
@@ -78,8 +81,14 @@ def test_bc_rules_registered_are_001_to_008() -> None:
 
 
 def test_gen_and_sec_rules_registered() -> None:
-    ids = [rule_id for rule_id in load_builtin_rules() if not rule_id.startswith("FC-BC-")]
+    ids = [rule_id for rule_id in load_builtin_rules() if rule_id[:6] not in ("FC-BC-", "FC-GQ-")]
     assert ids == [f"FC-GEN-00{n}" for n in range(1, 8)] + ["FC-SEC-001", "FC-SEC-002"]
+
+
+def test_groq_rules_registered_skip_the_reserved_ids() -> None:
+    # FC-GQ-016 is held until G5 and FC-GQ-020 is reserved (P1); ADR-037.
+    ids = [rule_id for rule_id in load_builtin_rules() if rule_id.startswith("FC-GQ-")]
+    assert ids == [f"FC-GQ-{n:03d}" for n in range(1, 20) if n != 16]
 
 
 def test_heuristic_rules_are_at_most_medium_and_say_not_observed(report: Report) -> None:

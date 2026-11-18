@@ -1140,3 +1140,93 @@ Format:
   fixtures are unchanged). A unit test that used Groq's host as its example of an unknown host
   now uses `llm.example.net`. Groq detection fixtures live in `tests/fixtures/detect_groq/`, so
   `tests/fixtures/parse`'s repo-level detection is unchanged.
+
+## ADR-037 — Groq contract rules, gating modes and provider-neutral adaptations (phase G3)
+
+- Date: 2026-11-18 · Phase: G3 · Status: accepted
+- Context: ADR-035 adds Groq beside BharatCode; G2 (ADR-036) classifies Groq call sites but
+  runs only FC-GEN/FC-SEC rules on them. G3 adds the Groq contract rules of
+  docs/GROQ_CONTRACT.md §4.4 and the §4.3 adaptations without changing any existing finding
+  (expected_findings.json and expected_runtime.json entries unchanged).
+- Decision:
+  1. **Gating modes.** Each provider rule family has a mode, `auto` / `forced` / `disabled`
+     (`engine.ProviderMode`; `BharatCodeMode` keeps its name, `GroqMode` and
+     `RuleContext.groq_mode` are added; `RuleContext.mode_for(meta)` picks the family's mode).
+     `auto` runs the family on call sites classified as its provider at any confidence and
+     lowers the finding's confidence one level when the call site's provider confidence is
+     `low`; `forced` runs it on every call site with no downgrade; `disabled` skips it.
+     `orchestrator._provider_mode` returns `(bharatcode_mode, groq_mode, declared_provider)`:
+
+     | Setting                                          | BharatCode | Groq     | Declared     |
+     | ------------------------------------------------ | ---------- | -------- | ------------ |
+     | none                                             | auto       | auto     | —            |
+     | `--provider bharatcode`                          | forced     | disabled | `bharatcode` |
+     | `--provider groq`                                | disabled   | forced   | `groq`       |
+     | `--provider openai_compatible`                   | disabled   | disabled | —            |
+     | `[project] provider = "bharatcode"`              | auto       | auto     | `bharatcode` |
+     | `[project] provider = "groq"`                    | auto       | auto     | `groq`       |
+     | `[project] provider` of kind `openai_compatible` | disabled   | disabled | —            |
+
+     The flag wins over the config; a custom profile counts by its `kind`. Every cell is tested
+     (`tests/scanner/test_groq_rule_gating.py`). FC-GQ-015 inspects client constructors, so it
+     is gated by the binding's detection (`RuleContext.applies_to_binding`). A Groq model ID
+     alone never makes a call site Groq (ADR-036 item 1): detection decides, not the rules.
+  2. **Rules.** `scanner/rules/groq.py`, `providers={"groq"}`, category `groq-contract`
+     (`RuleMeta.category` is an engine-only Literal, not part of the report schema, so
+     docs/report.schema.json is unchanged). Implemented: P0 FC-GQ-001, 002, 003, 005, 006, 007,
+     008, 011, 014, 015, 017; P1 FC-GQ-004, 009, 010, 012, 013, 018, 019. Reserved:
+     FC-GQ-016 (held until G5: rows C2 and C3 contradict each other) and FC-GQ-020 (P1). Each
+     finding links the Groq page (or the SDK repository) its contract row comes from. A status
+     code is claimed only for rows C2, C4, M4, S8 (and T3, unused); other messages say
+     "documented as not supported" and mark the effect [UNVERIFIED].
+  3. **Detection details** (beyond §4.4):
+     - FC-GQ-006 for `llama-3.3-70b-versatile` / `llama-3.1-8b-instant` is **low / high**, not
+       info: they were shut down for free and developer tiers on 16 Aug 2026 (M2), so requests
+       fail on those plans, the plans a static scan most often meets; FlightCheck cannot see the
+       plan, so the finding stays below medium. The preview Enterprise models (Muse Spark,
+       MiniMax M2.7) stay info: no shutdown is documented for them, only preview status (M1).
+     - FC-GQ-011 judges the model only when it is in the catalogue (an unknown model is
+       FC-GQ-006's finding; its JSON support is unknown), and only `json_schema` counts as
+       Structured Outputs: `json_object` mode and `text.format` `text` are not flagged with
+       streaming or tools (S5/T9 speak of Structured Outputs).
+     - FC-GQ-014's "raw with JSON mode" uses `json_object` only: S8 names JSON mode, and a 400
+       is claimed, so `json_schema` is not assumed to be included.
+     - FC-GQ-002/004/010 flag a parameter passed from a variable at one confidence level lower
+       (the FC-BC-002 precedent): sending the parameter at all is the documented problem.
+     - FC-GQ-019 does not flag a variable `stream` (it may be `True`); §4.4 says "stream not
+       literal True", which would flag the common `stream=stream` pattern falsely.
+     - FC-GQ-015 flags an `httpx`/`httpx2` client on Groq's host without `/openai/v1` only when a
+       resolved post from it uses a path without `/openai/v1` (a relative `/openai/v1/…` path
+       is correct).
+     - The catalogue gains `GroqModelFacts.reasoning_format` (False for the two GPT-OSS models,
+       §1.8/M5); `FREE_TIER_SHUTDOWN_MODELS` is derived from the catalogue (production +
+       Enterprise-only) and checked by a test.
+  4. **Adaptations** (meanings and IDs unchanged, ADR-012). `RuleContext.finding`/`finding_at`
+     accept optional `remediation` and `doc_url` overrides (additive). On call sites classified
+     `groq` the message, remediation and documentation link of FC-GEN-001…004 cite Groq;
+     FC-GEN-006/007 do so in files whose classified call sites are all `groq`. Other call sites
+     keep their previous wording (tests pin the BharatCode texts).
+     - **FC-GEN-005**: groq SDK clients without `timeout=` get an **info** note, not low: the
+       SDK default is bounded (60 s total, 5 s connect, 2 retries, K5), unlike the OpenAI SDK's
+       10 minutes, but Groq's checklist asks apps to configure timeouts (ST5), so the reminder
+       stays. The message now states each library's own default (OpenAI SDK 10 minutes; groq
+       60 s; httpx "its own default"), and the "BharatCode requests may queue" clause appears
+       only for BharatCode clients.
+     - **FC-GEN-003**: a Chat loop that checks only `x_groq.error` is still flagged; that field
+       reports a stream Groq stopped early (ST3) but not truncation (`finish_reason`). The
+       message and remediation name `x_groq.error` on Groq call sites. No expectation changed.
+     - **FC-SEC-001**: `gsk_` + ≥ 8 key characters is a prefixed key (critical/high), masked
+       before any rule output through the existing `collect_secrets` path (ADR-026);
+       `gsk_your_secret_key_here` and `gsk_...` are placeholders (info). The remediation names
+       `GROQ_API_KEY` for Groq keys (prefix, a name with the word GROQ, or a literal inside a
+       `groq` client's constructor), keeps the BharatCode text for BharatCode keys, and is
+       provider-neutral otherwise (the rule's default remediation is now neutral).
+  5. **Fixtures.** `tests/fixtures/rules/FC-GQ-0NN/` (bad and good per rule, clients that
+     detection classifies `groq`), plus Groq cases for FC-SEC-001 and FC-GEN-005; manifest
+     entries are additive. The shared rules-fixture root now has high-confidence BharatCode and
+     Groq signals, so its repository-level detection is `unknown` (a `provider_conflict` info
+     diagnostic). Only unresolved call sites without their own signals would inherit that; the
+     two existing ones carry their own BharatCode signals, so no existing finding changes.
+- Consequences: Groq call sites get contract findings in auto mode; `--provider groq` checks a
+  repository as Groq end to end. G4 adds the mock/runtime side; G5 verifies the [UNVERIFIED]
+  rows (FC-GQ-016 decided then). G6 retires FC-BC-* and the BharatCode texts kept here.

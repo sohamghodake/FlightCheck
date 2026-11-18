@@ -623,6 +623,15 @@
         "kind": "static"
       }
     ],
+    "FC-GEN-005/good_groq_sdk_default.py": [
+      {
+        "rule_id": "FC-GEN-005",
+        "line": 7,
+        "severity": "info",
+        "confidence": "high",
+        "kind": "static"
+      }
+    ],
     "FC-GEN-005/good_timeout_kwarg.py": [],
     "FC-GEN-005/good_with_options.py": [],
     "FC-GEN-006/bad_one_hop_arguments.py": [
@@ -672,6 +681,416 @@
       }
     ],
     "FC-GEN-007/good_json_dumps.py": [],
+    "FC-GQ-001/bad_raw_post.py": [
+      {
+        "rule_id": "FC-GQ-001",
+        "line": 11,
+        "severity": "high",
+        "confidence": "high",
+        "kind": "static"
+      }
+    ],
+    "FC-GQ-001/bad_store_true.py": [
+      {
+        "rule_id": "FC-GQ-001",
+        "line": 18,
+        "severity": "high",
+        "confidence": "high",
+        "kind": "static"
+      }
+    ],
+    "FC-GQ-001/good_store_false.py": [],
+    "FC-GQ-002/bad_literal_id.py": [
+      {
+        "rule_id": "FC-GQ-002",
+        "line": 18,
+        "severity": "high",
+        "confidence": "high",
+        "kind": "static"
+      }
+    ],
+    "FC-GQ-002/bad_variable_id.py": [
+      {
+        "rule_id": "FC-GQ-002",
+        "line": 18,
+        "severity": "high",
+        "confidence": "medium",
+        "kind": "static"
+      }
+    ],
+    "FC-GQ-002/good_replay_history.py": [],
+    "FC-GQ-003/bad_builtin_on_qwen.py": [
+      {
+        "rule_id": "FC-GQ-003",
+        "line": 12,
+        "severity": "high",
+        "confidence": "high",
+        "kind": "static"
+      },
+      {
+        "rule_id": "FC-GQ-006",
+        "line": 12,
+        "severity": "info",
+        "confidence": "high",
+        "kind": "static"
+      }
+    ],
+    "FC-GQ-003/bad_one_hop.py": [
+      {
+        "rule_id": "FC-GQ-003",
+        "line": 21,
+        "severity": "high",
+        "confidence": "medium",
+        "kind": "static"
+      }
+    ],
+    "FC-GQ-003/bad_web_search.py": [
+      {
+        "rule_id": "FC-GQ-003",
+        "line": 18,
+        "severity": "high",
+        "confidence": "high",
+        "kind": "static"
+      }
+    ],
+    "FC-GQ-003/good_builtin_on_gpt_oss.py": [],
+    "FC-GQ-003/good_function_and_mcp.py": [],
+    "FC-GQ-004/bad_unsupported_params.py": [
+      {
+        "rule_id": "FC-GQ-004",
+        "line": 18,
+        "severity": "medium",
+        "confidence": "high",
+        "kind": "static"
+      }
+    ],
+    "FC-GQ-004/good_supported_params.py": [],
+    "FC-GQ-005/bad_chat_budget.py": [
+      {
+        "rule_id": "FC-GQ-005",
+        "line": 12,
+        "severity": "medium",
+        "confidence": "high",
+        "kind": "static"
+      }
+    ],
+    "FC-GQ-005/bad_responses_budget.py": [
+      {
+        "rule_id": "FC-GQ-005",
+        "line": 18,
+        "severity": "medium",
+        "confidence": "high",
+        "kind": "static"
+      },
+      {
+        "rule_id": "FC-GQ-006",
+        "line": 18,
+        "severity": "low",
+        "confidence": "high",
+        "kind": "static"
+      }
+    ],
+    "FC-GQ-005/good_budget_at_limit.py": [],
+    "FC-GQ-005/good_model_from_env.py": [],
+    "FC-GQ-006/bad_decommissioned.py": [
+      {
+        "rule_id": "FC-GQ-006",
+        "line": 12,
+        "severity": "high",
+        "confidence": "high",
+        "kind": "static"
+      }
+    ],
+    "FC-GQ-006/bad_enterprise_only.py": [
+      {
+        "rule_id": "FC-GQ-006",
+        "line": 12,
+        "severity": "low",
+        "confidence": "high",
+        "kind": "static"
+      }
+    ],
+    "FC-GQ-006/bad_not_in_catalogue.py": [
+      {
+        "rule_id": "FC-GQ-006",
+        "line": 12,
+        "severity": "medium",
+        "confidence": "medium",
+        "kind": "static"
+      }
+    ],
+    "FC-GQ-006/good_preview_model.py": [
+      {
+        "rule_id": "FC-GQ-006",
+        "line": 11,
+        "severity": "info",
+        "confidence": "high",
+        "kind": "static"
+      }
+    ],
+    "FC-GQ-006/good_production_model.py": [],
+    "FC-GQ-007/bad_logit_bias.py": [
+      {
+        "rule_id": "FC-GQ-007",
+        "line": 12,
+        "severity": "high",
+        "confidence": "high",
+        "kind": "static"
+      }
+    ],
+    "FC-GQ-007/bad_logprobs.py": [
+      {
+        "rule_id": "FC-GQ-007",
+        "line": 12,
+        "severity": "high",
+        "confidence": "high",
+        "kind": "static"
+      }
+    ],
+    "FC-GQ-007/good_none_and_false.py": [],
+    "FC-GQ-008/bad_n_two.py": [
+      {
+        "rule_id": "FC-GQ-008",
+        "line": 12,
+        "severity": "high",
+        "confidence": "high",
+        "kind": "static"
+      }
+    ],
+    "FC-GQ-008/good_n_one.py": [],
+    "FC-GQ-009/bad_penalty_and_metadata.py": [
+      {
+        "rule_id": "FC-GQ-009",
+        "line": 12,
+        "severity": "low",
+        "confidence": "medium",
+        "kind": "static"
+      }
+    ],
+    "FC-GQ-009/good_zero_penalty.py": [],
+    "FC-GQ-010/bad_functions.py": [
+      {
+        "rule_id": "FC-GQ-010",
+        "line": 12,
+        "severity": "low",
+        "confidence": "high",
+        "kind": "static"
+      }
+    ],
+    "FC-GQ-010/bad_max_tokens.py": [
+      {
+        "rule_id": "FC-GQ-010",
+        "line": 12,
+        "severity": "low",
+        "confidence": "high",
+        "kind": "static"
+      }
+    ],
+    "FC-GQ-010/good_max_completion_tokens.py": [],
+    "FC-GQ-011/bad_schema_on_llama.py": [
+      {
+        "rule_id": "FC-GQ-006",
+        "line": 12,
+        "severity": "low",
+        "confidence": "high",
+        "kind": "static"
+      },
+      {
+        "rule_id": "FC-GQ-011",
+        "line": 12,
+        "severity": "medium",
+        "confidence": "high",
+        "kind": "static"
+      }
+    ],
+    "FC-GQ-011/bad_schema_with_stream.py": [
+      {
+        "rule_id": "FC-GQ-011",
+        "line": 12,
+        "severity": "medium",
+        "confidence": "high",
+        "kind": "static"
+      }
+    ],
+    "FC-GQ-011/bad_strict_on_safeguard.py": [
+      {
+        "rule_id": "FC-GQ-006",
+        "line": 12,
+        "severity": "info",
+        "confidence": "high",
+        "kind": "static"
+      },
+      {
+        "rule_id": "FC-GQ-011",
+        "line": 12,
+        "severity": "medium",
+        "confidence": "high",
+        "kind": "static"
+      }
+    ],
+    "FC-GQ-011/good_responses_text_format.py": [],
+    "FC-GQ-011/good_strict_on_gpt_oss.py": [],
+    "FC-GQ-012/bad_no_additional_properties.py": [
+      {
+        "rule_id": "FC-GQ-012",
+        "line": 12,
+        "severity": "medium",
+        "confidence": "medium",
+        "kind": "static"
+      }
+    ],
+    "FC-GQ-012/bad_optional_field.py": [
+      {
+        "rule_id": "FC-GQ-012",
+        "line": 18,
+        "severity": "medium",
+        "confidence": "medium",
+        "kind": "static"
+      }
+    ],
+    "FC-GQ-012/good_best_effort_schema.py": [],
+    "FC-GQ-012/good_strict_schema.py": [],
+    "FC-GQ-013/bad_no_json_instruction.py": [
+      {
+        "rule_id": "FC-GQ-013",
+        "line": 12,
+        "severity": "low",
+        "confidence": "medium",
+        "kind": "static"
+      }
+    ],
+    "FC-GQ-013/good_dynamic_messages.py": [],
+    "FC-GQ-013/good_json_instruction.py": [],
+    "FC-GQ-014/bad_effort_none_on_gpt_oss.py": [
+      {
+        "rule_id": "FC-GQ-014",
+        "line": 12,
+        "severity": "high",
+        "confidence": "high",
+        "kind": "static"
+      }
+    ],
+    "FC-GQ-014/bad_format_with_include.py": [
+      {
+        "rule_id": "FC-GQ-006",
+        "line": 12,
+        "severity": "info",
+        "confidence": "high",
+        "kind": "static"
+      },
+      {
+        "rule_id": "FC-GQ-014",
+        "line": 12,
+        "severity": "medium",
+        "confidence": "high",
+        "kind": "static"
+      }
+    ],
+    "FC-GQ-014/bad_raw_with_json_mode.py": [
+      {
+        "rule_id": "FC-GQ-006",
+        "line": 12,
+        "severity": "info",
+        "confidence": "high",
+        "kind": "static"
+      },
+      {
+        "rule_id": "FC-GQ-014",
+        "line": 12,
+        "severity": "high",
+        "confidence": "high",
+        "kind": "static"
+      }
+    ],
+    "FC-GQ-014/bad_reasoning_format_on_gpt_oss.py": [
+      {
+        "rule_id": "FC-GQ-014",
+        "line": 12,
+        "severity": "medium",
+        "confidence": "high",
+        "kind": "static"
+      }
+    ],
+    "FC-GQ-014/bad_responses_effort.py": [
+      {
+        "rule_id": "FC-GQ-014",
+        "line": 18,
+        "severity": "high",
+        "confidence": "high",
+        "kind": "static"
+      }
+    ],
+    "FC-GQ-014/good_reasoning.py": [],
+    "FC-GQ-015/bad_groq_sdk_double_prefix.py": [
+      {
+        "rule_id": "FC-GQ-015",
+        "line": 6,
+        "severity": "high",
+        "confidence": "high",
+        "kind": "static"
+      }
+    ],
+    "FC-GQ-015/bad_httpx_missing_prefix.py": [
+      {
+        "rule_id": "FC-GQ-015",
+        "line": 8,
+        "severity": "high",
+        "confidence": "high",
+        "kind": "static"
+      }
+    ],
+    "FC-GQ-015/bad_openai_sdk_host_only.py": [
+      {
+        "rule_id": "FC-GQ-015",
+        "line": 8,
+        "severity": "high",
+        "confidence": "high",
+        "kind": "static"
+      }
+    ],
+    "FC-GQ-015/good_groq_sdk_default.py": [],
+    "FC-GQ-015/good_httpx_full_path.py": [],
+    "FC-GQ-015/good_openai_sdk_full_url.py": [],
+    "FC-GQ-017/bad_groq_sdk_responses.py": [
+      {
+        "rule_id": "FC-GQ-017",
+        "line": 12,
+        "severity": "high",
+        "confidence": "medium",
+        "kind": "static"
+      }
+    ],
+    "FC-GQ-017/good_openai_sdk_responses.py": [],
+    "FC-GQ-018/bad_five_stops.py": [
+      {
+        "rule_id": "FC-GQ-018",
+        "line": 12,
+        "severity": "medium",
+        "confidence": "high",
+        "kind": "static"
+      }
+    ],
+    "FC-GQ-018/bad_too_many_tools.py": [
+      {
+        "rule_id": "FC-GQ-018",
+        "line": 145,
+        "severity": "medium",
+        "confidence": "medium",
+        "kind": "static"
+      }
+    ],
+    "FC-GQ-018/good_four_stops.py": [],
+    "FC-GQ-019/bad_stream_options_no_stream.py": [
+      {
+        "rule_id": "FC-GQ-019",
+        "line": 12,
+        "severity": "low",
+        "confidence": "high",
+        "kind": "static"
+      }
+    ],
+    "FC-GQ-019/good_stream_flag.py": [],
+    "FC-GQ-019/good_streaming.py": [],
     "FC-SEC-001/bad_api_key_literal.py": [
       {
         "rule_id": "FC-SEC-001",
@@ -697,6 +1116,15 @@
         "kind": "static"
       }
     ],
+    "FC-SEC-001/bad_groq_key.py": [
+      {
+        "rule_id": "FC-SEC-001",
+        "line": 6,
+        "severity": "critical",
+        "confidence": "high",
+        "kind": "static"
+      }
+    ],
     "FC-SEC-001/bad_prefixed_key.py": [
       {
         "rule_id": "FC-SEC-001",
@@ -716,6 +1144,22 @@
       }
     ],
     "FC-SEC-001/good_env_key.py": [],
+    "FC-SEC-001/good_groq_placeholders.py": [
+      {
+        "rule_id": "FC-SEC-001",
+        "line": 5,
+        "severity": "info",
+        "confidence": "medium",
+        "kind": "static"
+      },
+      {
+        "rule_id": "FC-SEC-001",
+        "line": 6,
+        "severity": "info",
+        "confidence": "high",
+        "kind": "static"
+      }
+    ],
     "FC-SEC-001/good_placeholders.py": [
       {
         "rule_id": "FC-SEC-001",

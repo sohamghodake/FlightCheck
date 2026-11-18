@@ -201,8 +201,8 @@ def scan(
         typer.Option(
             "--provider",
             help="Override provider detection. bharatcode: run the BharatCode rules on every "
-            "call site; groq: treat every call site as Groq (BharatCode rules off); "
-            "openai_compatible: BharatCode rules off.",
+            "call site (Groq rules off); groq: run the Groq rules on every call site "
+            "(BharatCode rules off); openai_compatible: both provider rule sets off.",
         ),
     ] = ProviderChoice.AUTO,
     rule: Annotated[

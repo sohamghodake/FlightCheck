@@ -34,7 +34,12 @@ from flightcheck.scanner.ast_utils import (
 from flightcheck.scanner.detect import DetectionResult
 from flightcheck.scanner.parser import CallSite, RepoIndex, decode_source
 
-BharatCodeMode = Literal["auto", "forced", "disabled"]
+# How a provider-specific rule family is gated (ADR-025, ADR-037): ``auto`` runs it on call
+# sites classified as its provider; ``forced`` on every call site (no confidence downgrade);
+# ``disabled`` never. BharatCodeMode keeps its name for existing callers.
+ProviderMode = Literal["auto", "forced", "disabled"]
+BharatCodeMode = ProviderMode
+GroqMode = ProviderMode
 ALL_PROVIDERS = "*"
 
 
@@ -42,10 +47,10 @@ ALL_PROVIDERS = "*"
 class RuleMeta:
     id: str  # "FC-BC-001"; permanent, never reused (ADR-012)
     title: str
-    category: Literal["bharatcode-contract", "robustness", "security"]
+    category: Literal["bharatcode-contract", "groq-contract", "robustness", "security"]
     default_severity: Severity
     default_confidence: Confidence
-    providers: frozenset[str]  # {"bharatcode"} or {"*"}
+    providers: frozenset[str]  # {"bharatcode"}, {"groq"} or {"*"}
     doc_source: str | None  # URL backing the rule
     remediation: str  # deterministic fix text (used in no-LLM mode)
     priority: Literal["P0", "P1", "P2"]
@@ -59,8 +64,11 @@ class RuleContext:
     index: RepoIndex
     detection: DetectionResult
     # auto: BharatCode rules run on call sites classified ``bharatcode`` (any confidence);
-    # forced: ``--provider bharatcode``; disabled: ``--provider openai_compatible``.
+    # forced: ``--provider bharatcode``; disabled: ``--provider openai_compatible``/``groq``.
     bharatcode_mode: BharatCodeMode = "auto"
+    # The same for Groq rules (ADR-037): forced by ``--provider groq``; disabled by
+    # ``--provider bharatcode``/``openai_compatible``.
+    groq_mode: GroqMode = "auto"
     diagnostics: list[Diagnostic] = field(default_factory=list)
     _sources: dict[str, list[str]] = field(default_factory=dict, repr=False)
     # Hard-coded key literals found before rules run (ADR-026): raw value -> replacement.
@@ -95,18 +103,30 @@ class RuleContext:
     def provider_of(self, call: CallSite) -> ProviderDetection | None:
         return self.detection.call_sites.get(call.id)
 
-    def applies(self, meta: RuleMeta, call: CallSite) -> bool:
+    def mode_for(self, meta: RuleMeta) -> ProviderMode:
+        """The gating mode of ``meta``'s rule family; ``auto`` for other rules."""
+        if "bharatcode" in meta.providers:
+            return self.bharatcode_mode
+        if "groq" in meta.providers:
+            return self.groq_mode
+        return "auto"
+
+    def _gated(self, meta: RuleMeta, detection: ProviderDetection | None) -> bool:
         if ALL_PROVIDERS in meta.providers:
             return True
-        if "bharatcode" in meta.providers:
-            if self.bharatcode_mode == "disabled":
-                return False
-            if self.bharatcode_mode == "forced":
-                return True
-            detection = self.provider_of(call)
-            return detection is not None and detection.provider == "bharatcode"
-        detection = self.provider_of(call)
+        mode = self.mode_for(meta)
+        if mode == "disabled":
+            return False
+        if mode == "forced":
+            return True
         return detection is not None and detection.provider in meta.providers
+
+    def applies(self, meta: RuleMeta, call: CallSite) -> bool:
+        return self._gated(meta, self.provider_of(call))
+
+    def applies_to_binding(self, meta: RuleMeta, binding_id: str) -> bool:
+        """``applies`` for a client constructor (FC-GQ-015), by the binding's detection."""
+        return self._gated(meta, self.detection.bindings.get(binding_id))
 
     def call_sites_for(self, meta: RuleMeta) -> list[CallSite]:
         return [call for call in self.index.call_sites if self.applies(meta, call)]
@@ -139,10 +159,19 @@ class RuleContext:
         *,
         severity: Severity | None = None,
         confidence: Confidence | None = None,
+        remediation: str | None = None,
+        doc_url: str | None = None,
     ) -> Finding:
         """A finding at ``call`` with source and documentation evidence."""
         return self.finding_at(
-            meta, call.location, message, severity=severity, confidence=confidence, call=call
+            meta,
+            call.location,
+            message,
+            severity=severity,
+            confidence=confidence,
+            call=call,
+            remediation=remediation,
+            doc_url=doc_url,
         )
 
     def finding_at(
@@ -154,15 +183,20 @@ class RuleContext:
         severity: Severity | None = None,
         confidence: Confidence | None = None,
         call: CallSite | None = None,
+        remediation: str | None = None,
+        doc_url: str | None = None,
     ) -> Finding:
         """A finding at any ``location`` (dict literal, print call, client constructor, …).
 
         ``call`` (optional) names the related call site for the finding's ``provider``.
+        ``remediation``/``doc_url`` (optional) replace the rule's defaults for this finding,
+        e.g. Groq wording on a provider-neutral rule (ADR-037).
         """
         loc = location
+        doc = doc_url or meta.doc_source
         evidence = [Evidence(type="source", location=loc, excerpt=self.excerpt(loc))]
-        if meta.doc_source:
-            evidence.append(Evidence(type="documentation", note=f"Documented at {meta.doc_source}"))
+        if doc:
+            evidence.append(Evidence(type="documentation", note=f"Documented at {doc}"))
         detection = self.provider_of(call) if call is not None else None
         return Finding(
             id=Finding.make_id(meta.id, loc.path, loc.line, loc.column),
@@ -175,8 +209,8 @@ class RuleContext:
             message=self.mask(message),
             location=loc,
             evidence=evidence,
-            remediation=meta.remediation,
-            doc_url=meta.doc_source,
+            remediation=remediation or meta.remediation,
+            doc_url=doc,
             provider=detection.provider if detection else None,
         )
 
@@ -238,9 +272,10 @@ def _downgrade_for_provider(finding: Finding, ctx: RuleContext, meta: RuleMeta) 
     """Lower confidence one level when the call site's provider confidence is ``low``.
 
     Only provider-specific rules are downgraded: an unsure provider says nothing about a
-    provider-independent (``"*"``) rule such as FC-GEN-004 (ADR-026).
+    provider-independent (``"*"``) rule such as FC-GEN-004 (ADR-026). A forced family
+    (``--provider bharatcode``/``groq``) is never downgraded (ADR-025, ADR-037).
     """
-    if ctx.bharatcode_mode == "forced" or ALL_PROVIDERS in meta.providers:
+    if ALL_PROVIDERS in meta.providers or ctx.mode_for(meta) == "forced":
         return finding
     call_id = _call_id(finding.location)
     detection = ctx.detection.call_sites.get(call_id) if call_id else None
@@ -269,7 +304,7 @@ def run_rules(
     findings: list[Finding] = []
     for rule_id in select_rules(rule_ids, reg):
         meta, fn = reg[rule_id]
-        if meta.providers == frozenset({"bharatcode"}) and ctx.bharatcode_mode == "disabled":
+        if ALL_PROVIDERS not in meta.providers and ctx.mode_for(meta) == "disabled":
             continue
         try:
             produced = list(fn(index, ctx))
@@ -289,6 +324,9 @@ def run_rules(
 
 __all__ = [
     "ALL_PROVIDERS",
+    "BharatCodeMode",
+    "GroqMode",
+    "ProviderMode",
     "RuleContext",
     "RuleFn",
     "RuleMeta",
