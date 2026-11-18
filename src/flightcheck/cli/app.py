@@ -198,7 +198,12 @@ def scan(
     ] = None,
     provider: Annotated[
         ProviderChoice,
-        typer.Option("--provider", help="Override provider detection."),
+        typer.Option(
+            "--provider",
+            help="Override provider detection. bharatcode: run the BharatCode rules on every "
+            "call site; groq: treat every call site as Groq (BharatCode rules off); "
+            "openai_compatible: BharatCode rules off.",
+        ),
     ] = ProviderChoice.AUTO,
     rule: Annotated[
         list[str] | None,

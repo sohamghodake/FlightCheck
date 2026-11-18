@@ -4,29 +4,47 @@ Each client binding and call site collects signals; the classification is the si
 highest confidence. Two ``high`` signals that disagree give ``unknown`` plus an ``info``
 diagnostic. A *supporting* signal (a documented model name) never outweighs a direct signal of
 the same confidence. Equal-confidence signals that still disagree resolve in the fixed order
-``bharatcode`` > ``openai_compatible_unknown`` > ``openai_or_env`` > ``unknown`` (ADR-024).
+``bharatcode`` > ``groq`` > ``openai_compatible_unknown`` > ``openai_or_env`` > ``unknown``
+(ADR-024, ADR-036). Groq signals (ADR-036): a base URL or raw post naming ``api.groq.com``, a
+base URL read from an env var whose name has the word ``GROQ``, and the groq SDK's clients are
+``high``; an API key read from such an env var is ``medium``; a documented Groq model is
+supporting ``medium``.
 Call sites whose receiver could not be resolved take the repo-level provider at ``low``
 confidence (ADR-011).
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Literal
 
-from flightcheck.core.config import BHARATCODE_DOCUMENTED_MODELS
+from flightcheck.core.config import BHARATCODE_DOCUMENTED_MODELS, GROQ_DOCUMENTED_MODELS, GROQ_HOST
 from flightcheck.core.models import Confidence, Diagnostic, Location, ProviderDetection
-from flightcheck.scanner.parser import SDK_CONSTRUCTORS, CallSite, ClientBinding, RepoIndex
+from flightcheck.scanner.parser import (
+    GROQ_SDK_CONSTRUCTORS,
+    SDK_CONSTRUCTORS,
+    CallSite,
+    ClientBinding,
+    RepoIndex,
+)
 
-Provider = Literal["bharatcode", "openai", "openai_compatible_unknown", "openai_or_env", "unknown"]
+Provider = Literal[
+    "bharatcode", "groq", "openai", "openai_compatible_unknown", "openai_or_env", "unknown"
+]
 
 BHARATCODE_HOST = "bharatcode.ai"
 BHARATCODE_ENV_MARKER = "BHARATCODE"
+# Groq env names must contain GROQ as a whole word (GROQ_API_KEY, MY_GROQ_URL), never as part of
+# another word, so a generic name cannot become ``groq`` by accident (ADR-036).
+GROQ_ENV_WORD = "GROQ"
+_ENV_WORD_SPLIT = re.compile(r"[^A-Z0-9]+")
 # BHARATCODE_DOCUMENTED_MODELS (core.config) is re-exported here for existing callers.
 
 _CONFIDENCE_RANK = {Confidence.LOW: 0, Confidence.MEDIUM: 1, Confidence.HIGH: 2}
 _PROVIDER_ORDER: tuple[Provider, ...] = (
     "bharatcode",
+    "groq",
     "openai",
     "openai_compatible_unknown",
     "openai_or_env",
@@ -71,6 +89,11 @@ def combine(signals: list[Signal]) -> tuple[Provider, Confidence, bool]:
     return provider, confidence, False
 
 
+def is_groq_env_name(name: str | None) -> bool:
+    """True when ``name`` has ``GROQ`` as one of its words (``GROQ_API_KEY``, ``groq_url``)."""
+    return bool(name) and GROQ_ENV_WORD in _ENV_WORD_SPLIT.split(str(name).upper())
+
+
 def binding_signals(binding: ClientBinding, declared_provider: str | None = None) -> list[Signal]:
     signals: list[Signal] = []
     has_base_url = "base_url" in binding.kwargs
@@ -93,7 +116,18 @@ def binding_signals(binding: ClientBinding, declared_provider: str | None = None
         signals.append(
             Signal("bharatcode", Confidence.MEDIUM, f"api_key read from env var {key_env}")
         )
-    if has_base_url and not bc_base:
+    groq_base = False
+    if has_base_url and GROQ_HOST in base_text.lower():
+        groq_base = True
+        signals.append(Signal("groq", Confidence.HIGH, f"base_url contains {GROQ_HOST}"))
+    if is_groq_env_name(base_env):
+        groq_base = True
+        signals.append(Signal("groq", Confidence.HIGH, f"base_url read from env var {base_env}"))
+    if is_groq_env_name(key_env):
+        signals.append(Signal("groq", Confidence.MEDIUM, f"api_key read from env var {key_env}"))
+    if binding.constructor in GROQ_SDK_CONSTRUCTORS:
+        signals.append(Signal("groq", Confidence.HIGH, f"groq SDK client ({binding.constructor})"))
+    if has_base_url and not bc_base and not groq_base:
         how = "a literal" if isinstance(base_literal, str) else "a non-literal value"
         if base_env:
             how = f"env var {base_env}"
@@ -104,7 +138,7 @@ def binding_signals(binding: ClientBinding, declared_provider: str | None = None
                 f"base_url set from {how} without bharatcode.ai",
             )
         )
-    if not has_base_url:
+    if not has_base_url and binding.constructor not in GROQ_SDK_CONSTRUCTORS:
         if binding.constructor in SDK_CONSTRUCTORS:
             signals.append(
                 Signal(
@@ -122,6 +156,8 @@ def binding_signals(binding: ClientBinding, declared_provider: str | None = None
 def _declared(declared_provider: str | None) -> list[Signal]:
     if declared_provider == "bharatcode":
         return [Signal("bharatcode", Confidence.HIGH, "flightcheck.toml provider = bharatcode")]
+    if declared_provider == "groq":
+        return [Signal("groq", Confidence.HIGH, "flightcheck.toml provider = groq")]
     return []
 
 
@@ -139,14 +175,35 @@ def call_site_signals(call: CallSite) -> list[Signal]:
                     supporting=True,
                 )
             )
+        elif model in GROQ_DOCUMENTED_MODELS:
+            signals.append(
+                Signal(
+                    "groq",
+                    Confidence.MEDIUM,
+                    f"model {model!r} is a Groq model",
+                    supporting=True,
+                )
+            )
     if call.kind == "http.post" and call.url and BHARATCODE_HOST in call.url.lower():
         signals.append(Signal("bharatcode", Confidence.HIGH, "raw HTTP post to bharatcode.ai"))
+    if call.kind == "http.post" and call.url and GROQ_HOST in call.url.lower():
+        signals.append(Signal("groq", Confidence.HIGH, f"raw HTTP post to {GROQ_HOST}"))
     return signals
 
 
 def _detection(signals: list[Signal], location: Location) -> tuple[ProviderDetection, bool]:
     provider, confidence, conflict = combine(signals)
-    texts = list(dict.fromkeys(s.text for s in signals))
+    ordered = signals
+    if not conflict:
+        # The winning provider's signals first (strongest, direct before supporting), so the
+        # first signal, which the terminal shows as the reason, explains the classification
+        # (phase G2). The rest keep their order. Conflicts keep the original order.
+        winners = sorted(
+            (s for s in signals if s.provider == provider),
+            key=lambda s: (-_CONFIDENCE_RANK[s.confidence], s.supporting),
+        )
+        ordered = [*winners, *(s for s in signals if s.provider != provider)]
+    texts = list(dict.fromkeys(s.text for s in ordered))
     return (
         ProviderDetection(
             provider=provider, confidence=confidence, location=location, signals=texts
@@ -237,6 +294,7 @@ def detect_providers(
 
 __all__ = [
     "BHARATCODE_DOCUMENTED_MODELS",
+    "GROQ_DOCUMENTED_MODELS",
     "DetectionResult",
     "Signal",
     "binding_signals",
@@ -244,4 +302,5 @@ __all__ = [
     "combine",
     "detect",
     "detect_providers",
+    "is_groq_env_name",
 ]

@@ -1,4 +1,4 @@
-# Implementation status — updated 2026-11-18 (Phase G1)
+# Implementation status — updated 2026-11-18 (Phase G2)
 
 | Phase | Title                                                                     | Status      | Date       | Commit                                         | Notes                                                    |
 | ----- | ------------------------------------------------------------------------- | ----------- | ---------- | ---------------------------------------------- | -------------------------------------------------------- |
@@ -18,7 +18,7 @@
 | 11    | Security hardening, architecture tests, QA pass                           | done        | 2026-11-09 | `test: security and architecture hardening (phase 11)` | 1445 tests; ADR-033, ADR-034; 0 leaks; redact fix (JSON-escaped values); see PHASE_11.md |
 | 12    | Documentation, demo, `BharatCode.txt`, submission                         | dropped     | 2026-11-18 |                                                | Dropped (BharatCode abandoned, 2026-11-18); ADR-035      |
 | G1    | Groq contract and migration decision                                      | done        | 2026-11-18 | `docs: Groq contract and migration plan (phase G1)` | Docs only; docs/GROQ_CONTRACT.md; ADR-035, ADR-022 void; see PHASE_G1.md |
-| G2    | Groq detection, provider profile, constants, redaction                    | not started |            |                                                | Same chat as G1                                          |
+| G2    | Groq detection, provider profile, constants, redaction                    | done        | 2026-11-18 | `feat: Groq provider profile and detection (phase G2)` | 1520 tests; ADR-036; same chat as G1; see PHASE_G2.md |
 | G3    | Groq static rules (`FC-GQ-*`), GEN/SEC adaptations                        | not started |            |                                                |                                                          |
 | G4    | Groq mock, scenarios and runtime checks                                   | not started |            |                                                |                                                          |
 | G5    | Groq adapter, `explain --llm groq`, live verification                     | not started |            |                                                | Needs a Groq key (developer's environment only)          |
@@ -33,7 +33,7 @@ The commit column names the phase commit by its message; find its hash with
   FC-GEN-001…007, FC-SEC-001…002, terminal
   output, JSON report at `PATH/.flightcheck/flightcheck-report.json` or `--output DIR`;
   `--provider`, `--rule`, `--min-severity`, `--fail-on`, `--fail-on-hypotheses`, `--no-color`,
-  `-v`; `--format html|all` also writes `flightcheck-report.html`, ADR-032); `flightcheck test PATH --allow-exec`
+  `-v`; `--provider auto|bharatcode|groq|openai_compatible`; `--format html|all` also writes `flightcheck-report.html`, ADR-032); `flightcheck test PATH --allow-exec`
   (Phase 7B: warning panel, scenarios S01–S06, per-scenario table, failed/needs-review details
   with traffic excerpts, merged scan unless `--no-scan`, `--scenario`, `--timeout`,
   `--fail-on`, `--keep-traffic`, `--format terminal|json|html|all`; `--config` exits 2, P1);
@@ -76,9 +76,10 @@ The commit column names the phase commit by its message; find its hash with
   `render_html`, `write_html`) renders the packaged template
   `reporting/templates/report.html.j2` (Jinja2 `autoescape=True`, no JavaScript, no external
   assets; ADR-021, ADR-032).
-- Tests: 1445 (`tests/cli`, `tests/unit`, `tests/scanner`, `tests/security`, `tests/mock`,
+- Tests: 1520 (`tests/cli`, `tests/unit`, `tests/scanner`, `tests/security`, `tests/mock`,
   `tests/providers`, `tests/runtime`, `tests/diagnostics`, `tests/architecture`; fixtures in
-  `tests/fixtures/parse`, `tests/fixtures/rules` and the 13 apps in `tests/fixtures/apps`,
+  `tests/fixtures/parse`, `tests/fixtures/detect_groq` (G2), `tests/fixtures/rules` and the 13
+  apps in `tests/fixtures/apps`,
   expectations in `tests/fixtures/expected_findings.json`);
   `FLIGHTCHECK_NO_NETWORK=1` is set for every test. `slow` tests: the 200-file index test,
   the `MockServer` / OpenAI-SDK tests in `tests/mock` and the child-process tests in
@@ -92,7 +93,9 @@ The commit column names the phase commit by its message; find its hash with
   `flightcheck scan src --fail-on low` on 3.11/3.12/3.13);
   `.github/workflows/flightcheck-example.yml` is manual-only (`workflow_dispatch`; docs/CI.md).
   Phases 0–9 are pushed and CI is green on GitHub (Python 3.11/3.12/3.13; confirmed by the
-  developer, no `gh` CLI in this session). Phase 11 is committed locally and not yet pushed.
+  developer). Phase 11 is pushed too (`origin/main` is its commit on 2026-11-18); its CI
+  result was not checked from this session (no `gh` CLI). Not pushed: `docs: drop the code
+  freeze`, G1 and G2 (local `main` is 3 commits ahead of `origin/main`).
 - Security and architecture (Phase 11): `tests/security` (leak matrix over every output,
   no-execution, path traversal, keys in `flightcheck.toml`, scan redaction) and
   `tests/architecture/test_imports.py` (ADR-034; orchestrator → mock allowed). `core.redact`
@@ -100,19 +103,26 @@ The commit column names the phase commit by its message; find its hash with
   docs/RULES.md.
 - Known broken: nothing.
 - BharatCode key available: no; BharatCode is abandoned (ADR-035). Groq replaces it over G1–G6;
-  the contract is docs/GROQ_CONTRACT.md (read 18 Nov 2026). Groq code: none yet (G1 was
-  docs only). Never paste a key.
+  the contract is docs/GROQ_CONTRACT.md (read 18 Nov 2026). Never paste a
+  key.
 - Plan: `docs/FLIGHTCHECK_IMPLEMENTATION_PHASE_PLAN.md`, local-only and git-ignored (ADR-000);
   BharatCode-era reference. G-phase prompts come from the developer in chat.
+- Groq (G2, ADR-036): built-in `providers.groq` profile (`[project] provider = "groq"`,
+  `FLIGHTCHECK_PROVIDER=groq`), dated model catalogue `core.config.GROQ_MODELS`,
+  `GROQ_PROFILE` in `providers/capabilities.py`, detection of `groq` call sites (groq SDK
+  clients, `api.groq.com`, `GROQ` env names, Groq models as supporting signals), `scan
+  --provider groq`, and `gsk_` key redaction. Groq call sites get only FC-GEN/FC-SEC rules
+  until G3. `test` and `explain` are still BharatCode/OpenAI-only (G4, G5).
 - CI: the example workflow now pins `actions/upload-artifact@v7` (verified 2026-11-18,
   ADR-008/ADR-032 item 5).
 
 ## Next phase
 
-- Phase G2 (same chat as G1): Groq detection (`groq` provider value, signals), `GROQ_PROFILE`,
-  Groq constants and the dated model catalogue in `core/config.py`, `gsk_` / `GROQ_API_KEY`
-  redaction. Start from docs/handoffs/PHASE_G1.md and docs/GROQ_CONTRACT.md §4 (items marked
-  G2). The BharatCode path must stay green (ADR-035 item 2).
+- Phase G3 (new chat): Groq static rules `FC-GQ-*` and the FC-GEN/FC-SEC adaptations from
+  docs/GROQ_CONTRACT.md §4.2–4.4 (items marked G3), with fixtures, expected_findings.json
+  entries and docs/RULES.md rows; FC-SEC-001 learns `gsk_`; decide FC-GEN-005 for groq
+  clients (60 s SDK default). Start from docs/handoffs/PHASE_G2.md. The BharatCode path must
+  stay green (ADR-035 item 2).
 - Still open (P1, unchanged): the `ci` command, Markdown output, the §19.8 tool-using diagnostic
   agent, the malformed-JSON repair attempt, FC-GEN-008/009, FC-SEC-003, FC-RT-010/031/042/043,
   scenarios S02b/S07–S10, `use_current_python`, `--force-exec`, `flightcheck test --config

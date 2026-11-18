@@ -228,7 +228,7 @@ class ScenarioResult(_Model):
 
 class ProviderDetection(_Model):
     provider: Literal[
-        "bharatcode", "openai", "openai_compatible_unknown", "openai_or_env", "unknown"
+        "bharatcode", "groq", "openai", "openai_compatible_unknown", "openai_or_env", "unknown"
     ]
     confidence: Confidence
     location: Location
@@ -385,7 +385,7 @@ class ScanRequest(_Model):
     """Input to ``orchestrator.run_scan``. Not part of the report schema."""
 
     root: Path
-    provider_override: str | None = None  # "bharatcode" | "openai_compatible" | None (auto)
+    provider_override: str | None = None  # "bharatcode" | "groq" | "openai_compatible" | None
     rule_ids: list[str] | None = None
     min_severity: Severity = Severity.INFO
 

@@ -5,8 +5,9 @@ Order of application in :func:`redact`:
 1. Exact values registered at runtime with :func:`register_secret` → ``[REDACTED]``.
 2. Exact values of environment variables whose name looks secret (key, token, secret,
    password) and whose value is at least 8 characters → ``[REDACTED:<ENV_NAME>]``.
-3. Pattern rules (BharatCode ``bc_live_`` keys, ``sk-`` keys, bearer tokens,
-   ``api_key=...``-style assignments).
+3. Pattern rules (BharatCode ``bc_live_`` keys, Groq ``gsk_`` keys, ``sk-`` keys, bearer
+   tokens, ``api_key=...``-style assignments). The ``gsk_`` prefix comes from the
+   placeholders in Groq's security guide (docs/GROQ_CONTRACT.md A4; ADR-036).
 
 Exact values go first so a pattern rule cannot partially rewrite a value before it is matched.
 """
@@ -22,6 +23,7 @@ REDACTED = "[REDACTED]"
 
 _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"bc_live_[A-Za-z0-9_\-]{4,}"), "bc_live_…[REDACTED]"),
+    (re.compile(r"gsk_[A-Za-z0-9_\-]{8,}"), "gsk_…[REDACTED]"),
     (re.compile(r"sk-[A-Za-z0-9_\-]{12,}"), "sk-…[REDACTED]"),
     (re.compile(r"(?i)bearer\s+[A-Za-z0-9._\-]{8,}"), "Bearer [REDACTED]"),
     (

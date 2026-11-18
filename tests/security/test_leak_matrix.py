@@ -2,7 +2,8 @@
 
 Distinct fake values are planted in a source literal, in ``BHARATCODE_API_KEY`` and another
 secret-named environment variable, in the app's stdout and stderr, in a recorded request body
-and in AI output (the fake backend, and the BharatCode backend through an injected transport).
+and in AI output (the fake backend, and the BharatCode backend through an injected transport);
+a Groq-format ``gsk_`` key (phase G2) goes into AI output and the app's stdout.
 ``scan``, ``test``, ``explain`` (fake, bharatcode, ``--dry-run``) and ``report`` (html and
 terminal) run through the CLI at ``-vv``; every stdout, stderr (logs included) and written
 file is checked for every raw value. ``report`` runs with the planted environment removed, so
@@ -42,6 +43,10 @@ STDERR_TAIL = "LEAKSTDERR00000005"  # printed as "token=" + tail
 BODY_TAIL = "LEAKBODY0000000006"  # sent in a request body as "bc_live_" + tail
 AI_KEY = "sk-" + "LEAKAIOUTPUT000007"  # in AI output
 AI_PASSWORD = "hunter" + "2LEAK0000008"  # in AI output as "password: …"
+# Groq key format (phase G2, ADR-036): caught only by the gsk_ pattern (not registered, not in
+# the environment). In AI output and in the app's stdout.
+GROQ_TAIL = "LEAKGROQ0000000009"
+GROQ_KEY = "gsk_" + GROQ_TAIL
 RAW_VALUES = {
     "source literal": SOURCE_KEY,
     "BHARATCODE_API_KEY": ENV_KEY,
@@ -51,6 +56,7 @@ RAW_VALUES = {
     "request body": "bc_live_" + BODY_TAIL,
     "AI output key": AI_KEY,
     "AI output password": AI_PASSWORD,
+    "Groq-format key": GROQ_KEY,
 }
 
 APP_SOURCE = f'''"""Leak-matrix app: plants values in source, stdout, stderr and a request body."""
@@ -70,6 +76,7 @@ LEGACY_KEY = "{SOURCE_KEY}"
 
 def main() -> int:
     print("stdout carries sk-" + "{STDOUT_TAIL}")
+    print("stdout carries gsk_" + "{GROQ_TAIL}")
     print("stderr carries token=" + "{STDERR_TAIL}", file=sys.stderr)
     secret = "bc_live_" + "{BODY_TAIL}"
     try:
@@ -102,7 +109,7 @@ def _poisoned_batch(input_text: str) -> str:
         item = FakeLLM._explain(group).model_dump()
         item["summary"] = f"Use {AI_KEY} and {ENV_KEY}."
         item["root_cause"] = f"The config says password: {AI_PASSWORD}."
-        item["impact"] = f"Leaks {OTHER_ENV}."
+        item["impact"] = f"Leaks {OTHER_ENV} and {GROQ_KEY}."
         item["fix_steps"] = [f"Rotate {AI_KEY}.", f"Remove {SOURCE_KEY}."]
         item["caveats"] = [f"password: {AI_PASSWORD}"]
         explanations.append(item)
@@ -270,6 +277,7 @@ def test_the_matrix_is_not_vacuous(static_outputs: dict[str, str]) -> None:
         summary = texts[0]["summary"]
         assert "sk-…[REDACTED]" in summary and "REDACTED" in summary.split(" and ")[1]
         assert "password=[REDACTED]" in texts[0]["root_cause"]
+        assert "gsk_…[REDACTED]" in texts[0]["impact"]
     assert "FC-SEC-001" in static_outputs["explain dry-run stdout"]  # the payload was printed
 
 
@@ -279,6 +287,7 @@ def test_the_runtime_matrix_is_not_vacuous(runtime_outputs: dict[str, str]) -> N
     s01 = report["scenarios"][0]
     assert s01["app_run"]["exit_code"] == 0
     assert "sk-…[REDACTED]" in s01["app_run"]["stdout_excerpt"]
+    assert "gsk_…[REDACTED]" in s01["app_run"]["stdout_excerpt"]
     assert "token=[REDACTED]" in s01["app_run"]["stderr_excerpt"]
     traffic = json.loads(runtime_outputs["traffic file"])
     first = traffic["scenarios"][0]["exchanges"][0]

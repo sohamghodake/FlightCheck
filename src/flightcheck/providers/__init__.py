@@ -19,17 +19,20 @@ from flightcheck.providers.base import (
 from flightcheck.providers.bharatcode import BharatCodeAdapter
 from flightcheck.providers.capabilities import (
     BHARATCODE_PROFILE,
+    GROQ_PROFILE,
     Capability,
     CapabilityEntry,
     CapabilityProfile,
     SupportLevel,
     bharatcode_profile,
     generic_profile,
+    groq_profile,
 )
 from flightcheck.providers.registry import build_adapter
 
 __all__ = [
     "BHARATCODE_PROFILE",
+    "GROQ_PROFILE",
     "BharatCodeAdapter",
     "Capability",
     "CapabilityEntry",
@@ -48,4 +51,5 @@ __all__ = [
     "bharatcode_profile",
     "build_adapter",
     "generic_profile",
+    "groq_profile",
 ]

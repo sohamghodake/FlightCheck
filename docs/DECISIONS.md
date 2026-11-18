@@ -1072,3 +1072,71 @@ Format:
   be added as a dev dependency for SDK-compatibility tests in G4/G5 only with its own ADR. Facts
   about Groq models and limits are dated (18 Nov 2026) and will drift; FC-GQ-006 and the
   capability profile must carry that date.
+
+## ADR-036 — Groq provider profile, detection and gating (phase G2)
+
+- Date: 2026-11-18 · Phase: G2 · Status: accepted
+- Context: ADR-035 adds Groq beside BharatCode. G2 needs a config profile, a capability
+  profile and AST-only detection of Groq call sites, without changing any existing
+  classification or finding (expected_findings.json and expected_runtime.json unchanged),
+  before any Groq rule exists (G3).
+- Decision:
+  1. **Signals** (extending ADR-024; all from docs/GROQ_CONTRACT.md): a `base_url` (literal or
+     one-hop fragments) containing `api.groq.com` → `groq`/`high`; a `base_url` read from an
+     env var whose name has `GROQ` as a whole word (split on non-alphanumerics: `GROQ_BASE_URL`
+     yes, `GROQUET_URL` no) → `high`; an `api_key` from such a variable → `medium`; a `groq.Groq`
+     or `groq.AsyncGroq` constructor (imports, aliases, from-imports) → `high` and, without
+     `base_url`, no `openai_or_env` signal (the SDK defaults to Groq's host); a raw HTTP post to
+     `api.groq.com` → `high`; a literal model in the dated Groq catalogue → supporting `medium`
+     (never outweighs a direct signal, ADR-024 item 2; GPT-OSS IDs are also served elsewhere);
+     `[project] provider = "groq"` / `--provider groq` → `high`. Only the host
+     `api.groq.com` counts, not `groq.com` in general.
+  2. **Tie order**: `bharatcode` > `groq` > `openai` > `openai_compatible_unknown` >
+     `openai_or_env` > `unknown`. BharatCode stays first so no existing tie changes; Groq
+     beats the generic classes, as BharatCode does. Two `high` signals naming different
+     providers (e.g. a groq SDK client pointed at `bharatcode.ai`) still give `unknown` plus a
+     `provider_conflict` diagnostic.
+  3. **Parser**: `groq.Groq`/`groq.AsyncGroq` join `CLIENT_CONSTRUCTORS` and
+     `SDK_CONSTRUCTORS` (now `OPENAI_SDK_CONSTRUCTORS | GROQ_SDK_CONSTRUCTORS`); their calls
+     have the OpenAI shape (`chat.completions.create`), so call-site extraction is unchanged.
+     FC-GEN-005's own constructor set is not changed: whether a groq client without `timeout=`
+     is a finding (its default is 60 s, contract K5) is G3's decision.
+  4. **Gating until G3**: `groq` call sites get only the provider-neutral FC-GEN/FC-SEC rules;
+     BharatCode rules keep running only on `bharatcode` call sites (auto mode). `--provider
+     groq` disables the BharatCode rules everywhere and declares `groq`;
+     `[project] provider = "groq"` (or `FLIGHTCHECK_PROVIDER=groq`) declares `groq` and keeps
+     auto mode. `groq` is added to `ProviderDetection.provider`, `ProviderConfig.kind` and the
+     `--provider` choices (additive, ADR-010; schema regenerated).
+  5. **Config profile**: built-in `providers.groq` with kind `groq`, base URL
+     `https://api.groq.com/openai/v1`, `api_key_env = "GROQ_API_KEY"`, default model
+     `openai/gpt-oss-20b`, timeouts connect 10 s / read 60 s (the groq SDK's 60 s default rather
+     than BharatCode's queue-sized 300 s), retries 3 attempts from 1 s up to 30 s. The key is
+     read from the environment and registered for redaction by the existing provider loop.
+     `explain.provider` stays `bharatcode`; `build_adapter` still has no Groq adapter (G5).
+  6. **Catalogue**: `core.config.GROQ_MODELS` (per-model tier, context, max completion tokens,
+     strict/best-effort JSON schema, parallel tools, built-in tools, documented
+     `reasoning_effort` values; `None` = not documented), `GROQ_DOCUMENTED_MODELS` and
+     `GROQ_DECOMMISSIONED_MODELS`, dated `GROQ_CATALOGUE_DATE = "18 Nov 2026"`. Llama 3.1 8B and
+     3.3 70B stay in the catalogue as Enterprise-only (shut down for free/developer tiers).
+  7. **Capability profile**: `GROQ_PROFILE` / `groq_profile()` from contract §1: plainly
+     documented → `supported_documented`, documented as unsupported (`store: true`,
+     `previous_response_id`) → `unsupported_documented`, every [UNVERIFIED] fact (Responses
+     streaming events, `background`, audio/video/file input) → `unknown`. Model-dependent
+     support (built-in tools, JSON schema, image input, `reasoning_effort: "none"`) is
+     `supported_documented` with a "Model-dependent" note; the profile stays provider-level and
+     `max_output_tokens` is `None` (the limit is per model). Declarations fill only `unknown`
+     entries, as for BharatCode (ADR-028 item 2).
+  8. **Redaction**: `core.redact` adds `gsk_` + ≥ 8 key characters → `gsk_…[REDACTED]`. The
+     prefix comes from Groq's own placeholders (contract A4 is [UNVERIFIED] as a key-format
+     guarantee, the same evidence level as `bc_live_`); over-redacting is harmless, missing a key
+     is not. FC-SEC-001 does not detect `gsk_` literals yet (G3).
+  9. **Signal order in `ProviderDetection.signals`**: when there is no conflict, the winning
+     provider's signals come first (strongest first, direct before supporting), then the rest
+     in collection order. The terminal shows `signals[0]` as the reason, which in a mixed
+     repository could name another provider's signal ("groq (high: base_url … OPENAI_BASE_URL
+     …)"). Conflicts keep the collection order. Only the order of the texts changes, never a
+     classification.
+- Consequences: Existing reports keep their classifications (the dogfood scan of `src` and all
+  fixtures are unchanged). A unit test that used Groq's host as its example of an unknown host
+  now uses `llm.example.net`. Groq detection fixtures live in `tests/fixtures/detect_groq/`, so
+  `tests/fixtures/parse`'s repo-level detection is unchanged.

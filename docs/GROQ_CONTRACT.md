@@ -152,7 +152,7 @@ This changes often; FC-GQ-006 must carry this date.
 | `openai/gpt-oss-safeguard-20b`        | preview                        | 131,072 | 65,536                | yes / no         | best effort only   | supported (values not listed)                        | no             |
 | `meta-models/muse-spark-open`         | preview, Enterprise            | 131,072 | 131,072               | yes / yes        | yes                | `low`, `medium`, `high`, `xhigh` (default)           | no             |
 | `minimaxai/minimax-m2.7`              | preview, Enterprise            | 196,608 | 131,072               | yes / yes        | no                 | supported                                            | no             |
-| `meta-llama/llama-prompt-guard-2-22m`, `…-86m` | preview (classifiers) | 512     | 512                   | —                | —                  | —                                                    | —              |
+| `meta-llama/llama-prompt-guard-2-22m`, `meta-llama/llama-prompt-guard-2-86m` | preview (classifiers) | 512     | 512                   | —                | —                  | —                                                    | —              |
 | `whisper-large-v3`, `whisper-large-v3-turbo` | production (audio)      | —       | —                     | —                | —                  | —                                                    | —              |
 | `canopylabs/orpheus-v1-english`, `canopylabs/orpheus-arabic-saudi` | preview (TTS) | 4,000 | 50,000          | —                | —                  | —                                                    | —              |
 

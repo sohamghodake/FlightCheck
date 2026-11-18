@@ -66,19 +66,24 @@ from flightcheck.scanner.discovery import DiscoveryOptions
 from flightcheck.scanner.engine import BharatCodeMode, RuleContext, run_rules
 from flightcheck.scanner.parser import RepoIndex, build_index
 
-PROVIDER_OVERRIDES = ("bharatcode", "openai_compatible")
+PROVIDER_OVERRIDES = ("bharatcode", "groq", "openai_compatible")
 
 
 def _provider_mode(
     request: ScanRequest, config: FlightCheckConfig
 ) -> tuple[BharatCodeMode, str | None]:
-    """BharatCode rule mode and the ``declared_provider`` passed to detection."""
+    """BharatCode rule mode and the ``declared_provider`` passed to detection.
+
+    A ``groq`` profile declares ``groq`` to detection. ``--provider groq`` also disables the
+    BharatCode rules everywhere; ``[project] provider = "groq"`` leaves them in ``auto`` mode,
+    where they run only on call sites still classified ``bharatcode`` (ADR-036).
+    """
     if request.provider_override is not None and request.provider_override not in (
         PROVIDER_OVERRIDES
     ):
         raise ConfigError(
             f"Unknown provider: {request.provider_override}",
-            hint="Use --provider auto, bharatcode or openai_compatible.",
+            hint="Use --provider auto, bharatcode, groq or openai_compatible.",
         )
     name = request.provider_override or config.provider
     if name is None:
@@ -87,6 +92,8 @@ def _provider_mode(
     kind = profile.kind if profile is not None else name
     if kind == "bharatcode":
         return ("forced" if request.provider_override else "auto"), "bharatcode"
+    if kind == "groq":
+        return ("disabled" if request.provider_override else "auto"), "groq"
     if kind == "openai_compatible":
         return "disabled", None
     return "auto", None

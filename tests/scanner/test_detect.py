@@ -65,7 +65,9 @@ def test_openai_or_env_without_hints():
 
 
 def test_other_base_url_is_openai_compatible_unknown():
-    src = "from openai import OpenAI\nc = OpenAI(base_url='https://api.groq.com/openai/v1')\n"
+    # Phase G2: this used Groq's host as the "other" host; Groq's host is now classified as
+    # ``groq`` (tests/scanner/test_detect_groq.py), so a neutral host keeps the test's intent.
+    src = "from openai import OpenAI\nc = OpenAI(base_url='https://llm.example.net/v1')\n"
     d = only_binding(detect(index_of(src)))
     assert (d.provider, d.confidence) == ("openai_compatible_unknown", Confidence.MEDIUM)
 

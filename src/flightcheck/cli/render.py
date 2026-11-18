@@ -38,6 +38,7 @@ class ReportFormat(StrEnum):
 class ProviderChoice(StrEnum):
     AUTO = "auto"
     BHARATCODE = "bharatcode"
+    GROQ = "groq"
     OPENAI_COMPATIBLE = "openai_compatible"
 
 

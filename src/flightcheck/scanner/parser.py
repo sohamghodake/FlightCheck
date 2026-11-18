@@ -34,6 +34,8 @@ CLIENT_CONSTRUCTORS = frozenset(
     {
         "openai.OpenAI",
         "openai.AsyncOpenAI",
+        "groq.Groq",
+        "groq.AsyncGroq",
         "httpx2.Client",
         "httpx2.AsyncClient",
         "httpx.Client",
@@ -41,7 +43,10 @@ CLIENT_CONSTRUCTORS = frozenset(
         "requests.Session",
     }
 )
-SDK_CONSTRUCTORS = frozenset({"openai.OpenAI", "openai.AsyncOpenAI"})
+OPENAI_SDK_CONSTRUCTORS = frozenset({"openai.OpenAI", "openai.AsyncOpenAI"})
+# The groq SDK (contract K2) has the same ``chat.completions.create`` call shape (ADR-036).
+GROQ_SDK_CONSTRUCTORS = frozenset({"groq.Groq", "groq.AsyncGroq"})
+SDK_CONSTRUCTORS = OPENAI_SDK_CONSTRUCTORS | GROQ_SDK_CONSTRUCTORS
 HTTP_MODULES = frozenset({"httpx", "httpx2", "requests"})
 CLIENT_KWARGS = ("base_url", "api_key", "timeout", "max_retries")
 

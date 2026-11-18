@@ -769,6 +769,7 @@
         "provider": {
           "enum": [
             "bharatcode",
+            "groq",
             "openai",
             "openai_compatible_unknown",
             "openai_or_env",

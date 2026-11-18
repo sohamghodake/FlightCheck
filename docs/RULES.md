@@ -11,7 +11,12 @@ expectations in `tests/fixtures/expected_findings.json`.
 ## How rules apply
 
 - BharatCode rules run on call sites classified `bharatcode` (any confidence), or on every call
-  site with `--provider bharatcode`. `--provider openai_compatible` turns them off.
+  site with `--provider bharatcode`. `--provider openai_compatible` and `--provider groq` turn
+  them off.
+- Groq call sites (phase G2, ADR-036): call sites classified `groq` get only the
+  provider-neutral FC-GEN and FC-SEC rules until the Groq contract rules (`FC-GQ-*`) arrive in
+  G3. `[project] provider = "groq"` classifies call sites as Groq without disabling the
+  BharatCode rules on call sites that still resolve to BharatCode.
 - When a call site's provider confidence is `low` (receiver not resolved; repo-level provider
   used), the finding's confidence is lowered one level. `--provider bharatcode` skips this.
 - Only literal values are inspected. A non-literal value (`store=flag`) never produces a contract
