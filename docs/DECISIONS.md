@@ -134,6 +134,7 @@ Format:
   | `actions/checkout`      | v7.0.1       | 2026-07-20 | —               | `actions/checkout@v7`          |
   | `actions/setup-python`  | v7.1.0       | 2026-10-22 | —               | `actions/setup-python@v7`      |
   | `astral-sh/setup-uv`    | v10.3.3      | 2026-10-28 | —               | not used in CI yet             |
+| `actions/upload-artifact` | v7.0.2     | 2026-10-07 | —               | `actions/upload-artifact@v7` (example workflow; added in phase G1, 2026-11-18) |
   | uv (local, informative) | 0.12.10      | —          | —               | documented in README only      |
 
 - Consequences: ruff is pinned to one minor series because ruff minors can change lint and format
@@ -931,7 +932,12 @@ Format:
      `include-hidden-files: true` because the directory is a dot-directory). The
      upload-artifact major was **not verified** in this phase (no `gh` CLI, no web access per
      the phase prompt); confirm it on its releases page before the first dispatch and add it to
-     ADR-008's table. docs/CI.md explains how users change the trigger, install step and path.
+     ADR-008's table.
+     **Closed in phase G1 (2026-11-18):** the latest release is v7.0.2 (2026-10-07, read from
+     `https://api.github.com/repos/actions/upload-artifact/releases`), so `@v6` was one major
+     behind; the example workflow now pins `@v7` (v7 adds an opt-in `archive` input and moves to
+     ESM; `name`, `path`, `if-no-files-found` and `include-hidden-files` are unchanged in use).
+     Row added to ADR-008's table. docs/CI.md explains how users change the trigger, install step and path.
   6. **Exit-line hint (ADR-025 item 5, ADR-031).** `scan` and `test` exit lines add
      `flightcheck explain <report path>` (shell-quoted) when the report has something to
      explain (a finding of any kind, or a `needs_review` check); otherwise the hint is omitted
@@ -1004,3 +1010,65 @@ Format:
      `tests/diagnostics/test_context.py`).
 - Consequences: A new dependency edge needs an ADR and an update to both the test tables and
   `docs/ARCHITECTURE.md` §3/§5.
+
+## ADR-022 — Void (reserved for Phase 10, never written)
+
+- Date: 2026-11-18 · Phase: G1 · Status: void
+- Context: The phase plan reserved ADR-022 for Phase 10 ("Golden transcripts are the reference
+  for mock fidelity"). Phase 10 needed a BharatCode key, which never arrived, and was dropped
+  with BharatCode itself (ADR-035).
+- Decision: ADR-022 is void. The number is not reused (the log is append-only). Mock fidelity
+  against live Groq traffic is decided in phase G5 under a new ADR number.
+- Consequences: Readers who meet "ADR-022" in older handoffs or the local plan know it was
+  never in force.
+
+## ADR-035 — Groq replaces BharatCode
+
+- Date: 2026-11-18 · Phase: G1 · Status: accepted
+- Context: FlightCheck was built against BharatCode's model API (docs/BHARATCODE_CONTRACT.md).
+  No BharatCode key is coming, so Phase 10 (live probe) and Phase 12 (Build League submission)
+  cannot happen, and every BharatCode fact stays unverifiable. FlightCheck continues as a
+  portfolio project. Groq offers an OpenAI-compatible API with public, detailed documentation,
+  a free tier and an official Python SDK, which makes it a checkable target. The developer
+  decided on a full replacement: Groq becomes the checked provider and the `explain` backend.
+- Decision:
+  1. **Groq is the provider contract.** docs/GROQ_CONTRACT.md (read 18 Nov 2026) is the source
+     for every Groq rule, mock behaviour and adapter check; [UNVERIFIED] rows stay labelled until
+     phase G5 verifies them live. CLAUDE.md's provider rule now points at that file.
+  2. **Strategy: add Groq first, remove BharatCode last.** G2 (detection, profile, constants,
+     redaction), G3 (static rules `FC-GQ-*`), G4 (mock, scenarios, runtime checks) and G5
+     (adapter, `explain --llm groq`, live verification) add the Groq path beside the BharatCode
+     one. The BharatCode path, its fixtures and its gates (`eval_fixtures.py --check --runtime`,
+     `expected_findings.json`, `expected_runtime.json`) stay working and green until G6 removes
+     them in one reviewed phase. Rejected alternative: replacing in place from G2 on. It would
+     break the evaluation gates and fixture expectations for several phases at once, mix
+     deletions with new behaviour in every diff, and leave no green baseline to compare the
+     Groq rules against. The cost of the chosen strategy is temporary duplication (two provider
+     constants sets, two profiles, two rule families), which G6 removes.
+  3. **IDs.** New Groq contract rules use `FC-GQ-NNN`; `FC-GEN-*` and `FC-SEC-*` are
+     provider-neutral and keep their IDs. In G6, `FC-BC-001…009` and BharatCode-only runtime
+     checks (`FC-RT-001` store-false, `FC-RT-003`, `FC-RT-004`, `FC-RT-005`) are retired, never
+     reused (ADR-012). The full keep/adapt/drop map is docs/GROQ_CONTRACT.md §4.
+  4. **Report schema.** Until G6, Groq support is additive under schema 1.0 (ADR-010): `groq`
+     is added to the `Provider` literal, `AIExplanation.backend` and the `--provider` choices;
+     nothing is renamed or removed. In G6, removing `"bharatcode"` from those enums would be a
+     breaking change. G6 decides between (a) keeping `"bharatcode"` as a legacy value that is
+     still accepted when reading old reports but never produced (schema stays 1.x), and (b)
+     schema `"2.0"` with a new ADR and `read_report` refusing or migrating 1.0 reports.
+     Recommendation: (a), because saved reports and CI artefacts stay readable and the change
+     costs one enum member.
+  5. **ADR-022** (reserved for the dropped Phase 10) is void (see the entry above).
+  6. **ADRs G6 is expected to supersede** in whole or in part (G6 confirms each against the
+     code): ADR-014 (mock enforces BharatCode's documented 400s), ADR-024 (detection rules that
+     name BharatCode), ADR-025 item 2 (`--provider bharatcode` gating), ADR-026 (FC-SEC-001's
+     `bc_live_` prefix), ADR-027 items 1 and 5 (BharatCode constants in core; 503 as the
+     documented default error), ADR-028 (`BHARATCODE_PROFILE`, the 32 000 budget pre-flight),
+     ADR-031 (`explain` with the BharatCode backend) and ADR-033's `bc_live_` redaction pattern.
+     ADR-015 (mock streaming modelled on OpenAI shapes) stays in force for Groq until G5.
+  7. Phases 10 and 12 are recorded as dropped (BharatCode abandoned, 2026-11-18) in
+     docs/IMPLEMENTATION_STATUS.md; phase prompts for G1–G6 come from the developer in chat.
+- Consequences: Every G-phase must keep the existing gates green. New dependencies still need an
+  ADR: the adapter stays raw HTTP (ADR-003), so the `groq` SDK is not a runtime dependency; it may
+  be added as a dev dependency for SDK-compatibility tests in G4/G5 only with its own ADR. Facts
+  about Groq models and limits are dated (18 Nov 2026) and will drift; FC-GQ-006 and the
+  capability profile must carry that date.

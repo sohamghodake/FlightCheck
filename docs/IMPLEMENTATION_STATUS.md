@@ -1,4 +1,4 @@
-# Implementation status — updated 2026-11-09 (Phase 11)
+# Implementation status — updated 2026-11-18 (Phase G1)
 
 | Phase | Title                                                                     | Status      | Date       | Commit                                         | Notes                                                    |
 | ----- | ------------------------------------------------------------------------- | ----------- | ---------- | ---------------------------------------------- | -------------------------------------------------------- |
@@ -14,9 +14,15 @@
 | 7B    | Scenarios S03/S05/S06, `test` command, runtime expectations               | done        | 2026-11-09 | `feat: test command with truncation, tool and stream-failure scenarios (phase 7B)` | 1188 tests; ADR-030; `--config` deferred (P1); see PHASE_07B.md |
 | 8     | AI diagnostics and `explain`                                              | done        | 2026-11-09 | `feat(diagnostics): explain command with BharatCode backend (phase 8)` | 1282 tests; ADR-019, ADR-020, ADR-031; agent loop (P1) not built; no live run (no key); see PHASE_08.md |
 | 9     | HTML report, `report` command, CI workflows                               | done        | 2026-11-09 | `feat(report): HTML report and CI integration (phase 9)` | 1322 tests; ADR-021, ADR-032; dogfood fix in the parser; `ci` command and Markdown (P1) not built; see PHASE_09.md |
-| 10    | Live BharatCode probe and golden transcripts                              | not started |            |                                                | P1 (P0 if a key arrives by Day 3); needs an API key      |
+| 10    | Live BharatCode probe and golden transcripts                              | dropped     | 2026-11-18 |                                                | Dropped (BharatCode abandoned, 2026-11-18); ADR-035; ADR-022 void |
 | 11    | Security hardening, architecture tests, QA pass                           | done        | 2026-11-09 | `test: security and architecture hardening (phase 11)` | 1445 tests; ADR-033, ADR-034; 0 leaks; redact fix (JSON-escaped values); see PHASE_11.md |
-| 12    | Documentation, demo, `BharatCode.txt`, submission                         | not started |            |                                                | Early run on Day 2, final run on Day 4                   |
+| 12    | Documentation, demo, `BharatCode.txt`, submission                         | dropped     | 2026-11-18 |                                                | Dropped (BharatCode abandoned, 2026-11-18); ADR-035      |
+| G1    | Groq contract and migration decision                                      | done        | 2026-11-18 | `docs: Groq contract and migration plan (phase G1)` | Docs only; docs/GROQ_CONTRACT.md; ADR-035, ADR-022 void; see PHASE_G1.md |
+| G2    | Groq detection, provider profile, constants, redaction                    | not started |            |                                                | Same chat as G1                                          |
+| G3    | Groq static rules (`FC-GQ-*`), GEN/SEC adaptations                        | not started |            |                                                |                                                          |
+| G4    | Groq mock, scenarios and runtime checks                                   | not started |            |                                                |                                                          |
+| G5    | Groq adapter, `explain --llm groq`, live verification                     | not started |            |                                                | Needs a Groq key (developer's environment only)          |
+| G6    | BharatCode removal and documentation cleanup                              | not started |            |                                                | Decides schema 1.x legacy value vs 2.0 (ADR-035 item 4)  |
 
 The commit column names the phase commit by its message; find its hash with
 `git log --oneline --grep "phase <N>"`.
@@ -93,25 +99,32 @@ The commit column names the phase commit by its message; find its hash with
   matches JSON-escaped `key=value` values (ADR-033); accepted redaction limits are listed in
   docs/RULES.md.
 - Known broken: nothing.
-- BharatCode key available: no (never paste the key).
-- Plan: `docs/FLIGHTCHECK_IMPLEMENTATION_PHASE_PLAN.md`, local-only and git-ignored (ADR-000).
+- BharatCode key available: no; BharatCode is abandoned (ADR-035). Groq replaces it over G1–G6;
+  the contract is docs/GROQ_CONTRACT.md (read 18 Nov 2026). Groq code: none yet (G1 was
+  docs only). Never paste a key.
+- Plan: `docs/FLIGHTCHECK_IMPLEMENTATION_PHASE_PLAN.md`, local-only and git-ignored (ADR-000);
+  BharatCode-era reference. G-phase prompts come from the developer in chat.
+- CI: the example workflow now pins `actions/upload-artifact@v7` (verified 2026-11-18,
+  ADR-008/ADR-032 item 5).
 
 ## Next phase
 
-- Phase 12 FINAL; Phase 10 only once a BharatCode key exists. Open decision (developer): no
-  BharatCode key is coming; Groq may replace it, either as the `explain` backend only or as
-  the checked provider. Wait for that decision before Phase 10/12 work that depends on it.
-  Start from docs/handoffs/PHASE_11.md. Confirm the `actions/upload-artifact` major
-  used by the example workflow (ADR-032 item 5). Still open (P1): the `ci` command, Markdown
-  output, the §19.8 tool-using diagnostic agent, the malformed-JSON repair attempt,
-  FC-BC-009, FC-GEN-008/009, FC-SEC-003, FC-RT-010/031/042/043, scenarios S02b/S07–S10,
-  `use_current_python`, `--force-exec`, `flightcheck test --config FILE`, the generic
-  OpenAI-compatible adapter and the `providers` command.
+- Phase G2 (same chat as G1): Groq detection (`groq` provider value, signals), `GROQ_PROFILE`,
+  Groq constants and the dated model catalogue in `core/config.py`, `gsk_` / `GROQ_API_KEY`
+  redaction. Start from docs/handoffs/PHASE_G1.md and docs/GROQ_CONTRACT.md §4 (items marked
+  G2). The BharatCode path must stay green (ADR-035 item 2).
+- Still open (P1, unchanged): the `ci` command, Markdown output, the §19.8 tool-using diagnostic
+  agent, the malformed-JSON repair attempt, FC-GEN-008/009, FC-SEC-003, FC-RT-010/031/042/043,
+  scenarios S02b/S07–S10, `use_current_python`, `--force-exec`, `flightcheck test --config
+  FILE`, the generic OpenAI-compatible adapter and the `providers` command. FC-BC-009 retires
+  with the BharatCode family in G6.
 
 ## Dropped / deferred (per plan §7.3)
 
+- Dropped (developer, 2026-11-18): BharatCode as the target provider; phases 10 (live probe)
+  and 12 (`BharatCode.txt`, Build League submission) are dropped. Groq replaces BharatCode
+  (ADR-035); the Build League overlap check (ADR-009) no longer applies.
 - Dropped (developer, 2026-11-09): the plan's 21:00 IST code freeze on 10 Nov (§27 Phase 12
   item 24, §4 budget). There is no code freeze; this overrides the plan.
 - Deferred from Phase 0: a committed lock file (`uv.lock` or `requirements-lock.txt`); see
   ADR-008.
-- Manual, outside the code: Build League project-list overlap check, to be recorded as ADR-009.

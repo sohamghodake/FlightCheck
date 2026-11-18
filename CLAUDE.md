@@ -1,31 +1,35 @@
 # CLAUDE.md — FlightCheck
 
-FlightCheck is a local-first Python CLI that finds BharatCode API integration mistakes in Python AI
-apps via static analysis, a traffic-recording contract mock, failure scenarios, and opt-in
-BharatCode-powered explanations.
+FlightCheck is a local-first Python CLI (a portfolio project) that finds Groq API integration
+mistakes in Python AI apps via static analysis, a traffic-recording contract mock, failure
+scenarios, and opt-in Groq-powered explanations. Groq replaces BharatCode (ADR-035): the
+BharatCode path keeps working until phase G6 removes it.
 
 ## Where the plan lives
 
-The implementation plan is at `docs/FLIGHTCHECK_IMPLEMENTATION_PHASE_PLAN.md`. It is **local-only**:
-it is git-ignored on purpose and is not in the public repository (see ADR-000 in
-docs/DECISIONS.md). Future sessions read it from that path. Never commit it, never remove its
-`.gitignore` entry, and never make CI or tests depend on it. It is reference, not authority: once
-an ADR exists, the ADR wins. If the file is missing, stop and ask the developer to restore it from
+Phase prompts for the Groq phases G1–G6 come from the developer in chat; the contract and
+migration map are in docs/GROQ_CONTRACT.md (§4 says which phase does what).
+
+The original implementation plan is at `docs/FLIGHTCHECK_IMPLEMENTATION_PHASE_PLAN.md`. It is
+**local-only**: it is git-ignored on purpose and is not in the public repository (see ADR-000 in
+docs/DECISIONS.md). Never commit it, never remove its `.gitignore` entry, and never make CI or
+tests depend on it. It is BharatCode-era reference, not authority: once an ADR exists, the ADR
+wins. If a prompt needs it and the file is missing, stop and ask the developer to restore it from
 their backup.
 
 ## Before you change anything
 
 1. Read: docs/IMPLEMENTATION_STATUS.md, docs/DECISIONS.md, docs/ARCHITECTURE.md, the latest
-   docs/handoffs/PHASE_*.md, and the plan sections your prompt names
-   (docs/FLIGHTCHECK_IMPLEMENTATION_PHASE_PLAN.md).
+   docs/handoffs/PHASE_*.md, docs/GROQ_CONTRACT.md, and any plan sections your prompt names.
 2. Run `git status` and `git log --oneline -15`. If the tree is dirty or the previous phase is not
    marked done, stop and report.
 3. Work only on the phase you were given. Never start the next phase.
 
 ## Non-negotiable rules
 
-- Never invent BharatCode endpoints, models, parameters, events or error formats. Use
-  docs/BHARATCODE_CONTRACT.md. Keep [UNVERIFIED] labels until Phase 10 verifies them.
+- Never invent Groq endpoints, models, parameters, events or error formats. Use
+  docs/GROQ_CONTRACT.md. Keep [UNVERIFIED] labels until G5 verifies them live.
+  (docs/BHARATCODE_CONTRACT.md stays the reference for the BharatCode path until G6.)
 - Never execute repository code outside runtime/harness.py, and only behind --allow-exec.
 - Never send anything to an external API without the consent flow in diagnostics/service.py.
 - Never print, log, or write secrets; all output goes through core/redact.py.
