@@ -98,8 +98,10 @@ The commit column names the phase commit by its message; find its hash with
 
 ## Next phase
 
-- Phase 12 FINAL (10 Nov, before the 21:00 IST freeze); Phase 10 only once a BharatCode key
-  exists. Start from docs/handoffs/PHASE_11.md. Confirm the `actions/upload-artifact` major
+- Phase 12 FINAL; Phase 10 only once a BharatCode key exists. Open decision (developer): no
+  BharatCode key is coming; Groq may replace it, either as the `explain` backend only or as
+  the checked provider. Wait for that decision before Phase 10/12 work that depends on it.
+  Start from docs/handoffs/PHASE_11.md. Confirm the `actions/upload-artifact` major
   used by the example workflow (ADR-032 item 5). Still open (P1): the `ci` command, Markdown
   output, the §19.8 tool-using diagnostic agent, the malformed-JSON repair attempt,
   FC-BC-009, FC-GEN-008/009, FC-SEC-003, FC-RT-010/031/042/043, scenarios S02b/S07–S10,
@@ -108,7 +110,8 @@ The commit column names the phase commit by its message; find its hash with
 
 ## Dropped / deferred (per plan §7.3)
 
-- Nothing dropped yet.
+- Dropped (developer, 2026-11-09): the plan's 21:00 IST code freeze on 10 Nov (§27 Phase 12
+  item 24, §4 budget). There is no code freeze; this overrides the plan.
 - Deferred from Phase 0: a committed lock file (`uv.lock` or `requirements-lock.txt`); see
   ADR-008.
 - Manual, outside the code: Build League project-list overlap check, to be recorded as ADR-009.

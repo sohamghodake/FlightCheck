@@ -79,6 +79,6 @@
   `flightcheck report <tmp>/flightcheck-report.json --output <tmp>/r.html` → exit 0, a full
   HTML page from the installed package. Skimmed the JSON and HTML: no absolute home paths, no
   key-like strings.
-- Exact next step for the next phase: Phase 12 FINAL (10 Nov, before the 21:00 IST freeze):
-  documentation, demo, `BharatCode.txt`, submission. Push Phase 11 first and check that CI is
+- Exact next step for the next phase: Phase 12 FINAL (no code freeze; the plan's 21:00 IST
+  freeze was dropped by the developer on 2026-11-09): documentation, demo, `BharatCode.txt`, submission. Push Phase 11 first and check that CI is
   green on 3.11/3.12/3.13. Phase 10 only once a BharatCode key exists.
